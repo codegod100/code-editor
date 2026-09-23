@@ -310,6 +310,53 @@ def serve():
             "prAvailable": shutil.which("gh") is not None,
         }
 
+    def git_diff(project: Path) -> dict:
+        status = git_status(project)
+        if not status["isRepo"]:
+            raise HTTPException(400, "this project is not a Git repository")
+        result = git_result(
+            project,
+            "diff",
+            "--no-ext-diff",
+            "--binary",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            timeout=60,
+        )
+        if result.returncode:
+            raise HTTPException(500, git_error(result, "could not generate diff"))
+        parts = [result.stdout]
+        for change in status["files"]:
+            if change["index"] != "?" and change["worktree"] != "?":
+                continue
+            untracked = git_result(
+                project,
+                "diff",
+                "--no-index",
+                "--binary",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                "/dev/null",
+                change["path"],
+                timeout=60,
+            )
+            if untracked.returncode not in (0, 1):
+                raise HTTPException(500, git_error(untracked, "could not generate diff"))
+            parts.append(untracked.stdout)
+        diff = "".join(parts)
+        maximum_diff_bytes = 2 * 1024 * 1024
+        encoded = diff.encode("utf-8")
+        truncated = len(encoded) > maximum_diff_bytes
+        if truncated:
+            diff = encoded[:maximum_diff_bytes].decode("utf-8", errors="ignore")
+        return {
+            "branch": status["branch"],
+            "diff": diff,
+            "changedCount": status["changedCount"],
+            "truncated": truncated,
+        }
+
     @api.get("/api/projects")
     async def list_projects():
         root.mkdir(parents=True, exist_ok=True)
@@ -464,6 +511,10 @@ def serve():
     @api.get("/api/projects/{name}/git/status")
     async def get_git_status(name: str):
         return git_status(project_dir(name))
+
+    @api.get("/api/projects/{name}/git/diff")
+    async def get_git_diff(name: str):
+        return await asyncio.to_thread(git_diff, project_dir(name))
 
     @api.post("/api/projects/{name}/git/commit")
     async def create_commit(name: str, request: Request):
