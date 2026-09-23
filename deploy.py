@@ -357,6 +357,51 @@ def serve():
             "truncated": truncated,
         }
 
+    def git_draft(project: Path, target: str) -> dict:
+        """Build editable commit or pull-request copy from local Git metadata."""
+        status = git_status(project)
+        if not status["isRepo"]:
+            raise HTTPException(400, "this project is not a Git repository")
+
+        paths = [change["path"] for change in status["files"]]
+        if target == "commit":
+            if not paths:
+                raise HTTPException(400, "there are no changes to commit")
+            if len(paths) == 1:
+                message = f"Update {paths[0]}"
+            elif len(paths) == 2:
+                message = f"Update {paths[0]} and {paths[1]}"
+            else:
+                message = f"Update {paths[0]}, {paths[1]}, and {len(paths) - 2} other files"
+            return {"message": message}
+
+        if target != "pull-request":
+            raise HTTPException(400, "draft target must be commit or pull-request")
+        if not status["hasRemote"]:
+            raise HTTPException(400, "this branch has no origin remote")
+        default_ref = git_result(
+            project, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"
+        )
+        if default_ref.returncode:
+            raise HTTPException(
+                400,
+                "origin's default branch is not configured; fetch origin before creating a pull request",
+            )
+        base = default_ref.stdout.strip().removeprefix("origin/")
+        if not base:
+            raise HTTPException(400, "origin's default branch is invalid")
+        commits = git_result(project, "log", "--format=%s", f"origin/{base}..HEAD")
+        if commits.returncode:
+            raise HTTPException(400, git_error(commits, "could not read branch commits"))
+        subjects = [line.strip() for line in commits.stdout.splitlines() if line.strip()]
+        if not subjects:
+            raise HTTPException(400, "this branch has no commits to include in a pull request")
+        return {
+            "title": subjects[0],
+            "base": base,
+            "description": "## Summary\n\n" + "\n".join(f"- {subject}" for subject in subjects),
+        }
+
     @api.get("/api/projects")
     async def list_projects():
         root.mkdir(parents=True, exist_ok=True)
@@ -525,6 +570,10 @@ def serve():
     @api.get("/api/projects/{name}/git/diff")
     async def get_git_diff(name: str):
         return await asyncio.to_thread(git_diff, project_dir(name))
+
+    @api.get("/api/projects/{name}/git/draft/{target}")
+    async def get_git_draft(name: str, target: str):
+        return await asyncio.to_thread(git_draft, project_dir(name), target)
 
     @api.post("/api/projects/{name}/git/commit")
     async def create_commit(name: str, request: Request):
