@@ -385,6 +385,72 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
+  Future<void> _renameProject() async {
+    final project = _project;
+    if (project == null || _agentBusy) return;
+    if (_dirty && !await _confirmDiscard()) return;
+    final name = TextEditingController(text: project.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename project'),
+        content: TextField(
+          controller: name,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Project name',
+            hintText: 'my-project',
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, name.text.trim()),
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+    name.dispose();
+    if (newName == null || newName.isEmpty || newName == project.name) return;
+    _code.clear();
+    setState(() {
+      _path = null;
+      _savedText = '';
+    });
+    setState(() => _loading = true);
+    try {
+      await _request(
+        'PATCH',
+        '/api/projects/${Uri.encodeComponent(project.name)}',
+        {'name': newName},
+      );
+      await _refreshProjects(select: newName);
+    } catch (error) {
+      _showError(error);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _closeProject() async {
+    if (_project == null) return;
+    if (_dirty && !await _confirmDiscard()) return;
+    _code.clear();
+    setState(() {
+      _project = null;
+      _path = null;
+      _savedText = '';
+      _files = const [];
+      _messages = const [];
+      _error = null;
+    });
+  }
+
   void _connectCodex() {
     _loginEvents?.close();
     setState(() {
@@ -788,6 +854,33 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         icon: const Icon(Icons.add),
         label: const Text('Project'),
       ),
+      if (_project != null)
+        PopupMenuButton<String>(
+          tooltip: 'Project actions',
+          onSelected: (value) {
+            if (value == 'rename') _renameProject();
+            if (value == 'close') _closeProject();
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(
+              value: 'rename',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.drive_file_rename_outline),
+                title: Text('Rename project'),
+              ),
+            ),
+            PopupMenuItem(
+              value: 'close',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.close),
+                title: Text('Close project'),
+              ),
+            ),
+          ],
+          icon: const Icon(Icons.more_vert),
+        ),
       const SizedBox(width: 8),
       Padding(
         padding: const EdgeInsets.only(right: 4),
