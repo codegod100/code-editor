@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@atproto/oauth-client-node": "^0.3.17",
     "@freeq/bot-kit": "0.1.0",
     "@freeq/sdk": "0.1.0"
   }

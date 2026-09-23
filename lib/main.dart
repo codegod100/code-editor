@@ -468,7 +468,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         _projects = projectValues;
         _codexConnected = values[1]['authenticated'] as bool? ?? false;
         _userName = values[2]['name'] as String? ?? '';
-        _userEmail = values[2]['email'] as String? ?? '';
+        _userEmail = values[2]['did'] as String? ?? '';
         _loading = false;
       });
       if (projectValues.isNotEmpty) await _selectProject(projectValues.first);
@@ -1947,7 +1947,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               ),
       ),
       PopupMenuButton<String>(
-        tooltip: _userName.isEmpty ? 'Pocket ID account' : _userName,
+        tooltip: _userName.isEmpty ? 'AT Protocol account' : _userName,
         onSelected: (value) {
           if (value == 'logout') _logout();
         },
