@@ -114,9 +114,10 @@ class _GhosttyTerminalState extends State<GhosttyTerminal> {
   }
 
   void _configureFrame(int viewId) {
-    final frame = ui_web.platformViewRegistry.getViewById(viewId)
-        as html.IFrameElement;
-    frame.src = 'terminal/terminal.html?project=${Uri.encodeQueryComponent(widget.projectName)}';
+    final frame =
+        ui_web.platformViewRegistry.getViewById(viewId) as html.IFrameElement;
+    frame.src =
+        'terminal/terminal.html?project=${Uri.encodeQueryComponent(widget.projectName)}&session=${widget.sessionId}';
   }
 
   @override
@@ -166,6 +167,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   String? _loginUrl;
   String? _loginCode;
   html.EventSource? _loginEvents;
+  final List<TerminalSession> _terminals = [];
+  int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
+  int? _activeTerminalId;
 
   bool get _dirty => _path != null && _code.text != _savedText;
 
@@ -257,6 +261,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _selectProject(ProjectSummary project) async {
     if (_dirty && !await _confirmDiscard()) return;
+    final previousProject = _project;
+    if (previousProject != null && previousProject.name != project.name) {
+      for (final terminal in _terminals) {
+        unawaited(_closeTerminal(previousProject.name, terminal.id));
+      }
+      _terminals.clear();
+      _activeTerminalId = null;
+    }
     _code.clear();
     setState(() {
       _project = project;
@@ -515,6 +527,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Future<void> _closeProject() async {
     if (_project == null) return;
     if (_dirty && !await _confirmDiscard()) return;
+    final project = _project!;
+    for (final terminal in _terminals) {
+      unawaited(_closeTerminal(project.name, terminal.id));
+    }
+    _terminals.clear();
+    _activeTerminalId = null;
     _code.clear();
     setState(() {
       _project = null;
@@ -655,9 +673,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void _openTerminal() {
     final project = _project;
     if (project == null) return;
-    var nextTerminalId = 2;
-    final terminals = <TerminalSession>[const TerminalSession(1)];
-    var activeTerminalId = 1;
+    if (_terminals.isEmpty) {
+      _terminals.add(TerminalSession(_nextTerminalId++));
+      _activeTerminalId = _terminals.single.id;
+    }
     showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -671,30 +690,28 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   height: 42,
                   alignment: Alignment.centerLeft,
                   decoration: const BoxDecoration(
-                    border: Border(
-                      top: BorderSide(color: Color(0xFF30363D)),
-                    ),
+                    border: Border(top: BorderSide(color: Color(0xFF30363D))),
                   ),
                   child: Row(
                     children: [
                       Expanded(
                         child: ListView(
                           scrollDirection: Axis.horizontal,
-                          children: terminals
+                          children: _terminals
                               .map(
                                 (terminal) => Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     TextButton(
                                       onPressed: () => setDialogState(
-                                        () => activeTerminalId = terminal.id,
+                                        () => _activeTerminalId = terminal.id,
                                       ),
                                       style: TextButton.styleFrom(
                                         foregroundColor:
-                                            activeTerminalId == terminal.id
-                                            ? Theme.of(
-                                                context,
-                                              ).colorScheme.primary
+                                            _activeTerminalId == terminal.id
+                                            ? Theme.of(context)
+                                                  .colorScheme
+                                                  .primary
                                             : null,
                                       ),
                                       child: Text(terminal.label),
@@ -704,26 +721,30 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                       visualDensity: VisualDensity.compact,
                                       iconSize: 16,
                                       onPressed: () {
-                                        if (terminals.length == 1) {
-                                          Navigator.pop(context);
-                                          return;
-                                        }
                                         setDialogState(() {
-                                          final closedIndex = terminals.indexOf(
-                                            terminal,
-                                          );
-                                          terminals.remove(terminal);
-                                          if (activeTerminalId == terminal.id) {
-                                            activeTerminalId = terminals[
-                                              closedIndex
-                                                  .clamp(
-                                                    0,
-                                                    terminals.length - 1,
-                                                  )
-                                                  .toInt()
-                                            ].id;
+                                          final closedIndex = _terminals
+                                              .indexOf(terminal);
+                                          _terminals.remove(terminal);
+                                          if (_activeTerminalId ==
+                                                  terminal.id &&
+                                              _terminals.isNotEmpty) {
+                                            _activeTerminalId =
+                                                _terminals[closedIndex
+                                                        .clamp(
+                                                          0,
+                                                          _terminals.length - 1,
+                                                        )
+                                                        .toInt()]
+                                                    .id;
                                           }
                                         });
+                                        _closeTerminal(
+                                          project.name,
+                                          terminal.id,
+                                        );
+                                        if (_terminals.isEmpty) {
+                                          Navigator.pop(context);
+                                        }
                                       },
                                       icon: const Icon(Icons.close),
                                     ),
@@ -736,9 +757,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                       IconButton(
                         tooltip: 'New terminal',
                         onPressed: () => setDialogState(() {
-                          final terminal = TerminalSession(nextTerminalId++);
-                          terminals.add(terminal);
-                          activeTerminalId = terminal.id;
+                          final terminal = TerminalSession(_nextTerminalId++);
+                          _terminals.add(terminal);
+                          _activeTerminalId = terminal.id;
                         }),
                         icon: const Icon(Icons.add),
                       ),
@@ -755,10 +776,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               ],
             ),
             body: IndexedStack(
-              index: terminals.indexWhere(
-                (terminal) => terminal.id == activeTerminalId,
+              index: _terminals.indexWhere(
+                (terminal) => terminal.id == _activeTerminalId,
               ),
-              children: terminals
+              children: _terminals
                   .map(
                     (terminal) => GhosttyTerminal(
                       projectName: project.name,
@@ -771,6 +792,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _closeTerminal(String projectName, int sessionId) async {
+    try {
+      await _request(
+        'DELETE',
+        '/api/projects/${Uri.encodeComponent(projectName)}/terminal/$sessionId',
+      );
+    } catch (error) {
+      _showError(error);
+    }
   }
 
   Future<bool> _confirmDiscard() async {
@@ -1320,14 +1352,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           children: [
             Shortcuts(
               shortcuts: const {
-                SingleActivator(
-                  LogicalKeyboardKey.enter,
-                  control: true,
-                ): RunAgentIntent(),
-                SingleActivator(
-                  LogicalKeyboardKey.enter,
-                  meta: true,
-                ): RunAgentIntent(),
+                SingleActivator(LogicalKeyboardKey.enter, control: true):
+                    RunAgentIntent(),
+                SingleActivator(LogicalKeyboardKey.enter, meta: true):
+                    RunAgentIntent(),
               },
               child: Actions(
                 actions: {

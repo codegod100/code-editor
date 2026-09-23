@@ -3,10 +3,11 @@ import { init, Terminal } from './ghostty-web.js';
 const mount = document.getElementById('terminal');
 const status = document.getElementById('status');
 const project = new URLSearchParams(location.search).get('project');
+const session = new URLSearchParams(location.search).get('session');
 
-if (!project) {
-  status.textContent = 'No project selected';
-  throw new Error('A project is required for the terminal');
+if (!project || !session) {
+  status.textContent = 'No terminal session selected';
+  throw new Error('A project and terminal session are required');
 }
 
 await init();
@@ -20,7 +21,7 @@ terminal.open(mount);
 
 const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const socket = new WebSocket(
-  `${scheme}//${location.host}/api/projects/${encodeURIComponent(project)}/terminal`,
+  `${scheme}//${location.host}/api/projects/${encodeURIComponent(project)}/terminal?session=${encodeURIComponent(session)}`,
 );
 socket.binaryType = 'arraybuffer';
 const decoder = new TextDecoder();

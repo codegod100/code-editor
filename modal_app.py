@@ -76,6 +76,7 @@ def serve():
     max_text_bytes = 2 * 1024 * 1024
     mutation_lock = asyncio.Lock()
     active_turns = {}
+    terminal_sessions = {}
 
     app_url = os.environ["APP_URL"].rstrip("/")
     pocket_id_issuer = os.environ["POCKET_ID_ISSUER"].rstrip("/")
@@ -330,32 +331,74 @@ def serve():
             await commit()
         return {"reset": True}
 
+    def stop_terminal_session(session):
+        import signal
+
+        process = session["process"]
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        finally:
+            try:
+                os.close(session["master_fd"])
+            except OSError:
+                pass
+
+    @api.delete("/api/projects/{name}/terminal/{session_id}")
+    async def close_project_terminal(name: str, session_id: int, request: Request):
+        if not request.session.get("user"):
+            raise HTTPException(401, "authentication required")
+        session = terminal_sessions.pop((name, session_id), None)
+        if session is not None:
+            await asyncio.to_thread(stop_terminal_session, session)
+        return {"closed": session is not None}
+
     @api.websocket("/api/projects/{name}/terminal")
     async def project_terminal(name: str, websocket: WebSocket):
-        """Bridge one authenticated browser terminal to an ephemeral project shell."""
+        """Bridge a reconnectable browser terminal to a project shell."""
         if not websocket.session.get("user"):
             await websocket.close(code=4401)
             return
         project = project_dir(name)
+        session_id = websocket.query_params.get("session")
+        if not session_id or not session_id.isdigit():
+            await websocket.close(code=4400)
+            return
+        session_key = (name, int(session_id))
         await websocket.accept()
 
         import pty
         import select
         import signal
 
-        master_fd, slave_fd = pty.openpty()
-        environment = os.environ.copy()
-        environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
-        process = subprocess.Popen(
-            ["bash", "-i"],
-            cwd=str(project),
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            env=environment,
-            start_new_session=True,
-        )
-        os.close(slave_fd)
+        session = terminal_sessions.get(session_key)
+        if session is None or session["process"].poll() is not None:
+            if session is not None:
+                await asyncio.to_thread(stop_terminal_session, session)
+            master_fd, slave_fd = pty.openpty()
+            environment = os.environ.copy()
+            environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
+            process = subprocess.Popen(
+                ["bash", "-i"],
+                cwd=str(project),
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                env=environment,
+                start_new_session=True,
+            )
+            os.close(slave_fd)
+            session = {"master_fd": master_fd, "process": process, "output": bytearray()}
+            terminal_sessions[session_key] = session
+        master_fd = session["master_fd"]
+        process = session["process"]
+
+        if session["output"]:
+            await websocket.send_bytes(session["output"])
 
         async def read_terminal() -> None:
             while True:
@@ -372,6 +415,9 @@ def serve():
                     return
                 if not output:
                     return
+                session["output"].extend(output)
+                if len(session["output"]) > 1024 * 1024:
+                    del session["output"][: len(session["output"]) - 1024 * 1024]
                 await websocket.send_bytes(output)
 
         output_task = asyncio.create_task(read_terminal())
@@ -400,15 +446,6 @@ def serve():
             pass
         finally:
             output_task.cancel()
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-                await asyncio.to_thread(process.wait, 5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            finally:
-                os.close(master_fd)
 
     @api.get("/api/codex/status")
     async def codex_status():

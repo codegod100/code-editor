@@ -31,10 +31,11 @@ Every clone, editor save, session reset, login, and completed agent turn calls
 `Volume.commit()` explicitly. The web function is limited to one container so
 two containers cannot concurrently modify the same Volume files.
 
-Terminal shells are deliberately ephemeral: each browser terminal connection
-starts an interactive Bash process in `/projects/<project>` and terminates it
-when the browser disconnects. Terminal scrollback and process state are not
-persisted to the volume.
+Terminal shells remain live while the user returns from the terminal workspace
+to the editor: reopening the workspace reconnects to each tab's Bash process
+and restores up to 1 MiB of its recent output. Closing a terminal tab ends its
+shell. Terminal sessions and scrollback are in-memory only, so a container
+restart does not preserve them.
 
 The app image is stateless. Rebuilding or restarting it does not remove project
 data. To make an offline backup:
