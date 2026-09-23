@@ -90,7 +90,7 @@ image = (
     modal.Image.from_registry(
         "ghcr.io/cirruslabs/flutter:stable", add_python="3.12"
     )
-    .apt_install("bash", "git")
+    .apt_install("bash", "git", "gh")
     .pip_install(
         "authlib==1.6.5",
         "fastapi[standard]==0.121.3",
@@ -146,6 +146,7 @@ def serve():
     max_text_bytes = 2 * 1024 * 1024
     mutation_lock = asyncio.Lock()
     active_turns = {}
+    agent_runs = {}
     terminal_sessions = {}
 
     app_url = os.environ["APP_URL"].rstrip("/")
@@ -267,6 +268,48 @@ def serve():
             return result.stderr.strip() or result.stdout.strip()
         return result.stdout.strip()
 
+    def git_result(project: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(project), *args], text=True, capture_output=True, timeout=timeout
+        )
+
+    def git_error(result: subprocess.CompletedProcess, fallback: str) -> str:
+        return result.stderr.strip() or result.stdout.strip() or fallback
+
+    def git_status(project: Path) -> dict:
+        if not (project / ".git").exists():
+            return {"isRepo": False, "files": [], "changedCount": 0}
+        status = git_result(project, "status", "--porcelain=v1", "--branch")
+        if status.returncode:
+            raise HTTPException(500, git_error(status, "could not read Git status"))
+        lines = status.stdout.splitlines()
+        header = lines[0] if lines and lines[0].startswith("## ") else ""
+        branch = header[3:].split("...")[0].split(" ")[0]
+        ahead = behind = 0
+        match = re.search(r"\[ahead (\d+)(?:, behind (\d+))?\]", header)
+        if match:
+            ahead, behind = int(match.group(1)), int(match.group(2) or 0)
+        else:
+            match = re.search(r"\[behind (\d+)\]", header)
+            if match:
+                behind = int(match.group(1))
+        files = []
+        for line in lines[1:]:
+            if len(line) < 4:
+                continue
+            files.append({"path": line[3:], "index": line[0], "worktree": line[1]})
+        remote = git_result(project, "remote", "get-url", "origin")
+        return {
+            "isRepo": True,
+            "branch": branch,
+            "files": files,
+            "changedCount": len(files),
+            "ahead": ahead,
+            "behind": behind,
+            "hasRemote": remote.returncode == 0,
+            "prAvailable": shutil.which("gh") is not None,
+        }
+
     @api.get("/api/projects")
     async def list_projects():
         root.mkdir(parents=True, exist_ok=True)
@@ -327,6 +370,8 @@ def serve():
     @api.patch("/api/projects/{name}")
     async def rename_project(name: str, request: Request):
         project = project_dir(name)
+        if (project / ".git").is_file():
+            raise HTTPException(400, "linked worktrees cannot be renamed from the editor")
         body = await request.json()
         new_name = str(body.get("name", "")).strip()
         if not project_name.fullmatch(new_name) or new_name in reserved:
@@ -342,6 +387,33 @@ def serve():
             os.replace(project, destination)
             await commit()
         return {"name": new_name}
+
+    @api.post("/api/projects/{name}/worktrees")
+    async def create_worktree(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        workspace_name = str(body.get("workspaceName", "")).strip()
+        branch = str(body.get("branch", "")).strip()
+        start_point = str(body.get("startPoint", "")).strip()
+        if not (project / ".git").exists():
+            raise HTTPException(400, "this project is not a Git repository")
+        if not project_name.fullmatch(workspace_name) or workspace_name in reserved:
+            raise HTTPException(400, "worktree name must use letters, numbers, ., _, or -")
+        if not branch or branch.startswith("-") or not start_point or start_point.startswith("-"):
+            raise HTTPException(400, "branch and starting ref are required")
+        destination = root / workspace_name
+        async with mutation_lock:
+            if destination.exists():
+                raise HTTPException(409, "a project or worktree with that name already exists")
+            result = await asyncio.to_thread(
+                git_result, project, "worktree", "add", "-b", branch, str(destination), start_point,
+                timeout=120,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not create worktree"))
+            write_session(destination, {"threadId": None, "messages": []})
+            await commit()
+        return {"name": workspace_name, "branch": branch, "startPoint": start_point}
 
     @api.get("/api/projects/{name}/tree")
     async def file_tree(name: str):
@@ -388,6 +460,104 @@ def serve():
             target.write_bytes(encoded)
             await commit()
         return {"saved": True, "path": path, "bytes": len(encoded)}
+
+    @api.get("/api/projects/{name}/git/status")
+    async def get_git_status(name: str):
+        return git_status(project_dir(name))
+
+    @api.post("/api/projects/{name}/git/commit")
+    async def create_commit(name: str, request: Request):
+        project = project_dir(name)
+        message = str((await request.json()).get("message", "")).strip()
+        if not message:
+            raise HTTPException(400, "commit message is required")
+        if not git_status(project)["isRepo"]:
+            raise HTTPException(400, "this project is not a Git repository")
+        async with mutation_lock:
+            add = await asyncio.to_thread(
+                git_result, project, "add", "-A", "--", ".", ":(exclude).code-editor"
+            )
+            if add.returncode:
+                raise HTTPException(400, git_error(add, "could not stage changes"))
+            commit_result = await asyncio.to_thread(git_result, project, "commit", "-m", message)
+            if commit_result.returncode:
+                raise HTTPException(400, git_error(commit_result, "could not create commit"))
+            await commit()
+        return {"message": commit_result.stdout.strip(), "status": git_status(project)}
+
+    @api.post("/api/projects/{name}/git/push")
+    async def push_branch(name: str):
+        project = project_dir(name)
+        status = git_status(project)
+        if not status["isRepo"] or not status["hasRemote"]:
+            raise HTTPException(400, "this branch has no origin remote")
+        async with mutation_lock:
+            result = await asyncio.to_thread(git_result, project, "push")
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not push branch"))
+            await commit()
+        return {"message": result.stdout.strip() or "Pushed", "status": git_status(project)}
+
+    @api.post("/api/projects/{name}/git/pull-request")
+    async def create_pull_request(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        title = str(body.get("title", "")).strip()
+        base = str(body.get("base", "")).strip()
+        description = str(body.get("description", "")).strip()
+        auto_merge_method = str(body.get("autoMergeMethod", "")).strip()
+        if not title or not base or not description:
+            raise HTTPException(400, "pull request title, base branch, and description are required")
+        if not shutil.which("gh"):
+            raise HTTPException(503, "GitHub CLI is unavailable in this deployment")
+        method_flag = {"merge": "--merge", "rebase": "--rebase", "squash": "--squash"}.get(auto_merge_method)
+        if auto_merge_method and method_flag is None:
+            raise HTTPException(400, "auto-merge method must be merge, rebase, or squash")
+        async with mutation_lock:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["gh", "pr", "create", "--title", title, "--body", description, "--base", base],
+                cwd=str(project), text=True, capture_output=True, timeout=60,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not create pull request"))
+            if method_flag is not None:
+                auto_merge = await asyncio.to_thread(
+                    subprocess.run,
+                    ["gh", "pr", "merge", "--auto", method_flag],
+                    cwd=str(project), text=True, capture_output=True, timeout=60,
+                )
+                if auto_merge.returncode:
+                    raise HTTPException(
+                        400,
+                        "pull request was created, but auto-merge could not be enabled: "
+                        + git_error(auto_merge, "unknown error"),
+                    )
+            await commit()
+        return {"url": result.stdout.strip(), "autoMergeEnabled": method_flag is not None, "status": git_status(project)}
+
+    @api.post("/api/projects/{name}/git/pull-request/auto-merge")
+    async def enable_auto_merge(name: str, request: Request):
+        project = project_dir(name)
+        method = str((await request.json()).get("method", "")).strip()
+        method_flag = {"merge": "--merge", "rebase": "--rebase", "squash": "--squash"}.get(method)
+        if method_flag is None:
+            raise HTTPException(400, "merge method must be merge, rebase, or squash")
+        status = git_status(project)
+        if not status["isRepo"] or not status["hasRemote"]:
+            raise HTTPException(400, "this branch has no origin remote")
+        if not shutil.which("gh"):
+            raise HTTPException(503, "GitHub CLI is unavailable in this deployment")
+        async with mutation_lock:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["gh", "pr", "merge", "--auto", method_flag],
+                cwd=str(project), text=True, capture_output=True, timeout=60,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not enable auto-merge"))
+            await commit()
+        return {"message": result.stdout.strip() or "Auto-merge enabled", "status": git_status(project)}
 
     @api.get("/api/projects/{name}/session")
     async def get_session(name: str):
@@ -556,21 +726,50 @@ def serve():
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    @api.post("/api/projects/{name}/agent")
-    async def run_agent(name: str, request: Request):
-        project = project_dir(name)
-        body = await request.json()
-        prompt = str(body.get("prompt", "")).strip()
-        if not prompt:
-            raise HTTPException(400, "prompt is required")
-        async with mutation_lock:
-            session = read_session(project)
+    def agent_activity(event) -> dict | None:
+        """Turn an SDK notification into a small, user-facing progress update."""
+        if event.method != "item/started":
+            return None
+        item = getattr(event.payload.item, "root", event.payload.item)
+        item_type = getattr(item, "type", "")
+        if item_type == "commandExecution":
+            command = " ".join(getattr(item, "command", "").split())
+            return {"type": "activity", "text": f"Running: {command}"}
+        if item_type == "fileChange":
+            paths = [change.path for change in getattr(item, "changes", [])]
+            description = ", ".join(paths[:3])
+            if len(paths) > 3:
+                description += ", …"
+            return {
+                "type": "activity",
+                "text": f"Editing {description}" if description else "Editing files",
+            }
+        if item_type == "reasoning":
+            return {"type": "activity", "text": "Planning the next step"}
+        if item_type == "agentMessage":
+            return {"type": "activity", "text": "Preparing a response"}
+        return None
 
+    async def execute_agent_run(name: str, project: Path, prompt: str, run: dict):
+        """Run Codex and make its non-sensitive progress available to the chat UI."""
+        queue = run["events"]
+
+        def emit(value: dict) -> None:
+            queue.put_nowait(value)
+
+        response_parts = []
+        completed_response = ""
+        try:
+            emit({"type": "activity", "text": "Starting Codex"})
             async with AsyncCodex() as codex:
                 account = await codex.account()
                 if account.account is None:
-                    raise HTTPException(401, "connect Codex before running an agent")
+                    raise RuntimeError("connect Codex before running an agent")
+                if run["stopped"]:
+                    raise RuntimeError("agent turn was stopped")
 
+                async with mutation_lock:
+                    session = read_session(project)
                 if session.get("threadId"):
                     thread = await codex.thread_resume(
                         session["threadId"],
@@ -591,35 +790,87 @@ def serve():
                     )
 
                 turn = await thread.turn(prompt)
-                active_turn = {"turn": turn, "stopped": False}
-                active_turns[name] = active_turn
-                try:
-                    result = await turn.run()
-                    response_text = result.final_response or ""
-                except Exception as exc:
-                    if active_turn["stopped"]:
-                        response_text = "Stopped."
-                    else:
-                        raise HTTPException(500, f"Codex turn failed: {exc}") from exc
-                finally:
-                    if active_turns.get(name) is active_turn:
-                        active_turns.pop(name)
+                run["turn"] = turn
+                if run["stopped"]:
+                    await turn.interrupt()
+                async for event in turn.stream():
+                    activity = agent_activity(event)
+                    if activity is not None:
+                        emit(activity)
+                    if event.method == "item/agentMessage/delta":
+                        response_parts.append(event.payload.delta)
+                        emit({"type": "response_delta", "text": event.payload.delta})
+                    elif event.method == "item/completed":
+                        item = getattr(event.payload.item, "root", event.payload.item)
+                        if getattr(item, "type", "") == "agentMessage" and getattr(
+                            getattr(item, "phase", None), "value", None
+                        ) == "final_answer":
+                            completed_response = item.text
 
-            messages = list(session.get("messages", []))
-            messages.extend(
-                [
-                    {"role": "user", "text": prompt},
-                    {"role": "assistant", "text": response_text},
-                ]
-            )
-            session = {"threadId": thread.id, "messages": messages[-100:]}
-            write_session(project, session)
-            await commit()
-        return {
-            "threadId": thread.id,
-            "response": response_text,
-            "messages": session["messages"],
-        }
+                response_text = completed_response or "".join(response_parts)
+                async with mutation_lock:
+                    messages = list(session.get("messages", []))
+                    messages.extend(
+                        [
+                            {"role": "user", "text": prompt},
+                            {"role": "assistant", "text": response_text},
+                        ]
+                    )
+                    persisted = {"threadId": thread.id, "messages": messages[-100:]}
+                    write_session(project, persisted)
+                    await commit()
+                emit({"type": "complete", "messages": persisted["messages"]})
+        except Exception as exc:
+            if run["stopped"]:
+                emit({"type": "complete", "messages": None, "response": "Stopped."})
+            else:
+                emit({"type": "error", "error": str(exc)})
+        finally:
+            run["complete"] = True
+            queue.put_nowait(None)
+            if active_turns.get(name) is run:
+                active_turns.pop(name, None)
+
+    @api.post("/api/projects/{name}/agent")
+    async def run_agent(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        prompt = str(body.get("prompt", "")).strip()
+        if not prompt:
+            raise HTTPException(400, "prompt is required")
+        async with mutation_lock:
+            if name in active_turns:
+                raise HTTPException(409, "an agent turn is already running")
+            run_id = os.urandom(16).hex()
+            run = {"events": asyncio.Queue(), "stopped": False, "complete": False}
+            active_turns[name] = run
+            agent_runs[run_id] = run
+            run["task"] = asyncio.create_task(execute_agent_run(name, project, prompt, run))
+        return {"runId": run_id}
+
+    @api.get("/api/projects/{name}/agent/events/{run_id}")
+    async def agent_events(name: str, run_id: str):
+        project_dir(name)
+        run = agent_runs.get(run_id)
+        if run is None:
+            raise HTTPException(404, "agent run not found")
+
+        async def events():
+            try:
+                while True:
+                    event = await run["events"].get()
+                    if event is None:
+                        break
+                    yield "data: " + json.dumps(event) + "\n\n"
+            finally:
+                if run["complete"]:
+                    agent_runs.pop(run_id, None)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @api.post("/api/projects/{name}/agent/stop")
     async def stop_agent(name: str):
@@ -628,7 +879,8 @@ def serve():
         if active_turn is None:
             raise HTTPException(409, "no agent turn is running")
         active_turn["stopped"] = True
-        await active_turn["turn"].interrupt()
+        if active_turn.get("turn") is not None:
+            await active_turn["turn"].interrupt()
         return {"stopped": True}
 
     api.mount("/", StaticFiles(directory="/app/build/web", html=True), name="web")
