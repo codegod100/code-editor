@@ -599,6 +599,35 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
+  Future<void> _createWorktree() async {
+    final project = _project;
+    if (project == null || !project.isRepo || _gitBusy) return;
+    final workspace = TextEditingController(text: '${project.name}-worktree');
+    final branch = TextEditingController();
+    final startPoint = TextEditingController(text: project.branch);
+    final values = await showDialog<List<String>>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Create isolated worktree'),
+      content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Text('A worktree has its own checkout and new branch, so Codex can work without changing this workspace.'),
+        const SizedBox(height: 16),
+        TextField(controller: workspace, autofocus: true, decoration: const InputDecoration(labelText: 'Workspace name', hintText: 'feature-worktree')),
+        const SizedBox(height: 12),
+        TextField(controller: branch, decoration: const InputDecoration(labelText: 'New branch name', hintText: 'codex/new-feature')),
+        const SizedBox(height: 12),
+        TextField(controller: startPoint, decoration: const InputDecoration(labelText: 'Starting ref', hintText: 'main or a commit SHA')),
+      ])),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, [workspace.text.trim(), branch.text.trim(), startPoint.text.trim()]), child: const Text('Create worktree'))],
+    ));
+    workspace.dispose(); branch.dispose(); startPoint.dispose();
+    if (values == null || values.any((value) => value.isEmpty)) return;
+    setState(() => _gitBusy = true);
+    try {
+      final response = await _request('POST', _projectUrl('/worktrees'), {'workspaceName': values[0], 'branch': values[1], 'startPoint': values[2]});
+      await _refreshProjects(select: response['name'] as String);
+    } catch (error) { _showError(error); }
+    finally { if (mounted) setState(() => _gitBusy = false); }
+  }
+
   Future<void> _renameProject() async {
     final project = _project;
     if (project == null || _agentBusy) return;
@@ -1389,6 +1418,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Widget _buildAgent() => Column(
     children: [
       _panelHeader('AGENT', [
+        IconButton(
+          tooltip: 'Create isolated Git worktree',
+          visualDensity: VisualDensity.compact,
+          onPressed: _project?.isRepo == true && !_gitBusy ? _createWorktree : null,
+          icon: const Icon(Icons.account_tree_outlined, size: 18),
+        ),
         IconButton(
           tooltip: 'Refresh source control',
           visualDensity: VisualDensity.compact,

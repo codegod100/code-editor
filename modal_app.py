@@ -299,6 +299,8 @@ def serve():
     @api.patch("/api/projects/{name}")
     async def rename_project(name: str, request: Request):
         project = project_dir(name)
+        if (project / ".git").is_file():
+            raise HTTPException(400, "linked worktrees cannot be renamed from the editor")
         body = await request.json()
         new_name = str(body.get("name", "")).strip()
         if not project_name.fullmatch(new_name) or new_name in reserved:
@@ -314,6 +316,33 @@ def serve():
             os.replace(project, destination)
             await commit()
         return {"name": new_name}
+
+    @api.post("/api/projects/{name}/worktrees")
+    async def create_worktree(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        workspace_name = str(body.get("workspaceName", "")).strip()
+        branch = str(body.get("branch", "")).strip()
+        start_point = str(body.get("startPoint", "")).strip()
+        if not (project / ".git").exists():
+            raise HTTPException(400, "this project is not a Git repository")
+        if not project_name.fullmatch(workspace_name) or workspace_name in reserved:
+            raise HTTPException(400, "worktree name must use letters, numbers, ., _, or -")
+        if not branch or branch.startswith("-") or not start_point or start_point.startswith("-"):
+            raise HTTPException(400, "branch and starting ref are required")
+        destination = root / workspace_name
+        async with mutation_lock:
+            if destination.exists():
+                raise HTTPException(409, "a project or worktree with that name already exists")
+            result = await asyncio.to_thread(
+                git_result, project, "worktree", "add", "-b", branch, str(destination), start_point,
+                timeout=120,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not create worktree"))
+            write_session(destination, {"threadId": None, "messages": []})
+            await commit()
+        return {"name": workspace_name, "branch": branch, "startPoint": start_point}
 
     @api.get("/api/projects/{name}/tree")
     async def file_tree(name: str):
@@ -374,7 +403,9 @@ def serve():
         if not git_status(project)["isRepo"]:
             raise HTTPException(400, "this project is not a Git repository")
         async with mutation_lock:
-            add = await asyncio.to_thread(git_result, project, "add", "-A")
+            add = await asyncio.to_thread(
+                git_result, project, "add", "-A", "--", ".", ":(exclude).code-editor"
+            )
             if add.returncode:
                 raise HTTPException(400, git_error(add, "could not stage changes"))
             commit_result = await asyncio.to_thread(git_result, project, "commit", "-m", message)
