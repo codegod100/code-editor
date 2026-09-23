@@ -17,6 +17,16 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parent
 ORIGIN_DEPLOY_ENV = "CODE_EDITOR_DEPLOYING_ORIGIN_MAIN"
 
+# Modal currently can report a zero CLI exit status even when an image builder
+# fails. Keep these tied to its emitted builder diagnostics so the launcher
+# never calls a failed build a deployment.
+MODAL_BUILD_FAILURE_MARKERS = (
+    "Runner failed with exit code:",
+    "Terminating task due to error:",
+    "failed to run builder command",
+    "Error: Failed to compile application",
+)
+
 
 def run_git(*arguments: str, capture_output: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -25,6 +35,11 @@ def run_git(*arguments: str, capture_output: bool = False) -> subprocess.Complet
         check=True,
         capture_output=capture_output,
     )
+
+
+def modal_build_failed(output: str) -> bool:
+    """Return whether Modal emitted a known image-build failure diagnostic."""
+    return any(marker in output for marker in MODAL_BUILD_FAILURE_MARKERS)
 
 
 def deploy_origin_main() -> int:
@@ -63,11 +78,25 @@ def deploy_origin_main() -> int:
                 cwd=release_root,
                 env=environment,
                 check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
             )
         except OSError as error:
             print(f"Unable to run Modal CLI: {error}", file=sys.stderr)
             return 1
-        return result.returncode
+
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+        if result.returncode != 0 or modal_build_failed(result.stdout):
+            print(
+                "Deployment failed; the previous live release remains active. "
+                f"origin/main {revision} was not deployed.",
+                file=sys.stderr,
+            )
+            return result.returncode or 1
+
+        print(f"Deployment completed for origin/main {revision}.")
+        return 0
 
 
 if __name__ == "__main__" and os.environ.get(ORIGIN_DEPLOY_ENV) != "1":

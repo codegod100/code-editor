@@ -604,7 +604,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     final server = TextEditingController(text: 'wss://irc.freeq.at/irc');
     final channel = TextEditingController(text: '#tasks');
     final task = TextEditingController(text: _agentPrompt.text);
-    final context = TextEditingController();
+    final handoffContext = TextEditingController();
     List<FreeqBot> bots = const [];
     List<String> capabilities = const [];
     String? capability;
@@ -675,7 +675,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                     ),
                     const SizedBox(height: 10),
                     TextField(
-                      controller: context,
+                      controller: handoffContext,
                       maxLines: 3,
                       decoration: const InputDecoration(
                         labelText: 'Context for the bot (optional)',
@@ -745,7 +745,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       server.dispose();
       channel.dispose();
       task.dispose();
-      context.dispose();
+      handoffContext.dispose();
       return;
     }
     try {
@@ -754,7 +754,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         'channel': channel.text.trim(),
         'capability': capability,
         'title': task.text.trim(),
-        'context': context.text.trim(),
+        'context': handoffContext.text.trim(),
       });
       if (!mounted) return;
       setState(() {
@@ -775,7 +775,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     server.dispose();
     channel.dispose();
     task.dispose();
-    context.dispose();
+    handoffContext.dispose();
   }
 
   Future<void> _openFile(String path) async {
