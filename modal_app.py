@@ -75,6 +75,7 @@ def serve():
     reserved = {".codex", ".system"}
     max_text_bytes = 2 * 1024 * 1024
     mutation_lock = asyncio.Lock()
+    active_turns = {}
 
     app_url = os.environ["APP_URL"].rstrip("/")
     pocket_id_issuer = os.environ["POCKET_ID_ISSUER"].rstrip("/")
@@ -463,16 +464,26 @@ def serve():
                         ),
                     )
 
+                turn = await thread.turn(prompt)
+                active_turn = {"turn": turn, "stopped": False}
+                active_turns[name] = active_turn
                 try:
-                    result = await thread.run(prompt)
+                    result = await turn.run()
+                    response_text = result.final_response or ""
                 except Exception as exc:
-                    raise HTTPException(500, f"Codex turn failed: {exc}") from exc
+                    if active_turn["stopped"]:
+                        response_text = "Stopped."
+                    else:
+                        raise HTTPException(500, f"Codex turn failed: {exc}") from exc
+                finally:
+                    if active_turns.get(name) is active_turn:
+                        active_turns.pop(name)
 
             messages = list(session.get("messages", []))
             messages.extend(
                 [
                     {"role": "user", "text": prompt},
-                    {"role": "assistant", "text": result.final_response or ""},
+                    {"role": "assistant", "text": response_text},
                 ]
             )
             session = {"threadId": thread.id, "messages": messages[-100:]}
@@ -480,9 +491,19 @@ def serve():
             await commit()
         return {
             "threadId": thread.id,
-            "response": result.final_response or "",
+            "response": response_text,
             "messages": session["messages"],
         }
+
+    @api.post("/api/projects/{name}/agent/stop")
+    async def stop_agent(name: str):
+        project_dir(name)
+        active_turn = active_turns.get(name)
+        if active_turn is None:
+            raise HTTPException(409, "no agent turn is running")
+        active_turn["stopped"] = True
+        await active_turn["turn"].interrupt()
+        return {"stopped": True}
 
     api.mount("/", StaticFiles(directory="/app/build/web", html=True), name="web")
     return api

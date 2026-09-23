@@ -143,6 +143,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _loading = true;
   bool _saving = false;
   bool _agentBusy = false;
+  bool _agentStopping = false;
   bool _codexConnected = false;
   String _userName = '';
   String _userEmail = '';
@@ -455,7 +456,26 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     } catch (error) {
       _showError(error);
     } finally {
-      if (mounted) setState(() => _agentBusy = false);
+      if (mounted) {
+        setState(() {
+          _agentBusy = false;
+          _agentStopping = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _stopAgent() async {
+    if (_project == null || !_agentBusy || _agentStopping) return;
+    setState(() {
+      _agentStopping = true;
+      _error = null;
+    });
+    try {
+      await _request('POST', _projectUrl('/agent/stop'));
+    } catch (error) {
+      if (mounted) setState(() => _agentStopping = false);
+      _showError(error);
     }
   }
 
@@ -1024,6 +1044,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     children: [
       _panelHeader('AGENT', [
         IconButton(
+          tooltip: _agentStopping ? 'Stopping agent' : 'Stop agent',
+          visualDensity: VisualDensity.compact,
+          onPressed: _agentBusy && !_agentStopping ? _stopAgent : null,
+          icon: const Icon(Icons.stop_circle_outlined, size: 18),
+        ),
+        IconButton(
           tooltip: 'New thread',
           visualDensity: VisualDensity.compact,
           onPressed: _resetAgent,
@@ -1067,7 +1093,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                           SizedBox(width: 10),
-                          Text('Codex is working…'),
+                          Text(
+                            _agentStopping
+                                ? 'Stopping Codex…'
+                                : 'Codex is working…',
+                          ),
                         ],
                       ),
                     );
@@ -1143,9 +1173,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 ),
                 const Spacer(),
                 FilledButton.icon(
-                  onPressed: _agentBusy || _project == null ? null : _runAgent,
-                  icon: const Icon(Icons.arrow_upward, size: 18),
-                  label: const Text('Run'),
+                  onPressed: _agentBusy
+                      ? (_agentStopping ? null : _stopAgent)
+                      : (_project == null ? null : _runAgent),
+                  icon: Icon(
+                    _agentBusy
+                        ? Icons.stop_circle_outlined
+                        : Icons.arrow_upward,
+                    size: 18,
+                  ),
+                  label: Text(_agentBusy ? 'Stop' : 'Run'),
                 ),
               ],
             ),
