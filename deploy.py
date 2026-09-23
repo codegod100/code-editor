@@ -138,8 +138,6 @@ image = (
     .run_commands(
         "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs",
         "npm --prefix /app/freeq-handoff install --omit=dev",
-        "npm ci",
-        "npm run build:tree-sitter",
         "flutter build web --release --no-wasm-dry-run",
     )
 )
