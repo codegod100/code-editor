@@ -10,6 +10,8 @@ The Flutter UI and FastAPI backend deploy together as one Modal application.
 - Starts and resumes one Codex SDK thread per project.
 - Lets Codex inspect, edit, and verify the selected project with
   `workspace-write` sandbox access.
+- Provides an authenticated, project-rooted browser terminal rendered by
+  `libghostty-vt` WebAssembly.
 - Requires Pocket ID OIDC authentication before serving the UI or any API.
 - Authenticates Codex with ChatGPT device login; no API key is embedded in the
   app or frontend.
@@ -28,6 +30,11 @@ All mutable state is on the Modal v2 Volume
 Every clone, editor save, session reset, login, and completed agent turn calls
 `Volume.commit()` explicitly. The web function is limited to one container so
 two containers cannot concurrently modify the same Volume files.
+
+Terminal shells are deliberately ephemeral: each browser terminal connection
+starts an interactive Bash process in `/projects/<project>` and terminates it
+when the browser disconnects. Terminal scrollback and process state are not
+persisted to the volume.
 
 The app image is stateless. Rebuilding or restarting it does not remove project
 data. To make an offline backup:

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -60,6 +61,63 @@ class AgentMessage {
 
   final String role;
   final String text;
+}
+
+const _terminalViewType = 'libghostty-terminal';
+bool _terminalViewRegistered = false;
+
+void _registerTerminalView() {
+  if (_terminalViewRegistered) return;
+  ui_web.platformViewRegistry.registerViewFactory(_terminalViewType, (viewId) {
+    return html.IFrameElement()
+      ..style.border = '0'
+      ..style.height = '100%'
+      ..style.width = '100%';
+  });
+  _terminalViewRegistered = true;
+}
+
+class GhosttyTerminal extends StatefulWidget {
+  const GhosttyTerminal({
+    super.key,
+    required this.projectName,
+    required this.sessionId,
+  });
+
+  final String projectName;
+  final int sessionId;
+
+  @override
+  State<GhosttyTerminal> createState() => _GhosttyTerminalState();
+}
+
+class _GhosttyTerminalState extends State<GhosttyTerminal> {
+  @override
+  void initState() {
+    super.initState();
+    _registerTerminalView();
+  }
+
+  void _configureFrame(int viewId) {
+    final frame = ui_web.platformViewRegistry.getViewById(viewId)
+        as html.IFrameElement;
+    frame.src = 'terminal/terminal.html?project=${Uri.encodeQueryComponent(widget.projectName)}';
+  }
+
+  @override
+  Widget build(BuildContext context) => HtmlElementView(
+    key: ValueKey(widget.sessionId),
+    viewType: _terminalViewType,
+    onPlatformViewCreated: _configureFrame,
+  );
+}
+
+class TerminalSession {
+  const TerminalSession(this.id);
+
+  final int id;
+
+  String get label => 'Terminal $id';
 }
 
 class WorkspaceScreen extends StatefulWidget {
@@ -433,6 +491,127 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
+  void _openTerminal() {
+    final project = _project;
+    if (project == null) return;
+    var nextTerminalId = 2;
+    final terminals = <TerminalSession>[const TerminalSession(1)];
+    var activeTerminalId = 1;
+    showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog.fullscreen(
+          child: Scaffold(
+            appBar: AppBar(
+              title: Text('${project.name} — Terminal'),
+              bottom: PreferredSize(
+                preferredSize: const Size.fromHeight(42),
+                child: Container(
+                  height: 42,
+                  alignment: Alignment.centerLeft,
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      top: BorderSide(color: Color(0xFF30363D)),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          children: terminals
+                              .map(
+                                (terminal) => Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    TextButton(
+                                      onPressed: () => setDialogState(
+                                        () => activeTerminalId = terminal.id,
+                                      ),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor:
+                                            activeTerminalId == terminal.id
+                                            ? Theme.of(
+                                                context,
+                                              ).colorScheme.primary
+                                            : null,
+                                      ),
+                                      child: Text(terminal.label),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Close ${terminal.label}',
+                                      visualDensity: VisualDensity.compact,
+                                      iconSize: 16,
+                                      onPressed: () {
+                                        if (terminals.length == 1) {
+                                          Navigator.pop(context);
+                                          return;
+                                        }
+                                        setDialogState(() {
+                                          final closedIndex = terminals.indexOf(
+                                            terminal,
+                                          );
+                                          terminals.remove(terminal);
+                                          if (activeTerminalId == terminal.id) {
+                                            activeTerminalId = terminals[
+                                              closedIndex
+                                                  .clamp(
+                                                    0,
+                                                    terminals.length - 1,
+                                                  )
+                                                  .toInt()
+                                            ].id;
+                                          }
+                                        });
+                                      },
+                                      icon: const Icon(Icons.close),
+                                    ),
+                                  ],
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'New terminal',
+                        onPressed: () => setDialogState(() {
+                          final terminal = TerminalSession(nextTerminalId++);
+                          terminals.add(terminal);
+                          activeTerminalId = terminal.id;
+                        }),
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                IconButton(
+                  tooltip: 'Close terminal workspace',
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            body: IndexedStack(
+              index: terminals.indexWhere(
+                (terminal) => terminal.id == activeTerminalId,
+              ),
+              children: terminals
+                  .map(
+                    (terminal) => GhosttyTerminal(
+                      projectName: project.name,
+                      sessionId: terminal.id,
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<bool> _confirmDiscard() async {
     if (!_dirty) return true;
     return await showDialog<bool>(
@@ -579,6 +758,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ],
     ),
     actions: [
+      TextButton.icon(
+        onPressed: _project == null ? null : _openTerminal,
+        icon: const Icon(Icons.terminal),
+        label: const Text('Terminal'),
+      ),
       TextButton.icon(
         onPressed: _createProject,
         icon: const Icon(Icons.add),
@@ -918,15 +1102,37 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ),
         child: Column(
           children: [
-            TextField(
-              controller: _agentPrompt,
-              enabled: !_agentBusy,
-              minLines: 2,
-              maxLines: 6,
-              decoration: const InputDecoration(
-                hintText: 'Ask Codex to change this project…',
+            Shortcuts(
+              shortcuts: const {
+                SingleActivator(
+                  LogicalKeyboardKey.enter,
+                  control: true,
+                ): RunAgentIntent(),
+                SingleActivator(
+                  LogicalKeyboardKey.enter,
+                  meta: true,
+                ): RunAgentIntent(),
+              },
+              child: Actions(
+                actions: {
+                  RunAgentIntent: CallbackAction<RunAgentIntent>(
+                    onInvoke: (_) {
+                      _runAgent();
+                      return null;
+                    },
+                  ),
+                },
+                child: TextField(
+                  controller: _agentPrompt,
+                  enabled: !_agentBusy,
+                  minLines: 2,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    hintText: 'Ask Codex to change this project…',
+                    helperText: 'Ctrl/Cmd+Enter to run',
+                  ),
+                ),
               ),
-              onSubmitted: (_) => _runAgent(),
             ),
             const SizedBox(height: 8),
             Row(
@@ -952,4 +1158,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
 class SaveIntent extends Intent {
   const SaveIntent();
+}
+
+class RunAgentIntent extends Intent {
+  const RunAgentIntent();
 }
