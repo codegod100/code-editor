@@ -1,12 +1,12 @@
 {
-    "name": "cloud_code_editor",
-    "short_name": "cloud_code_editor",
+    "name": "Cloud Code Editor",
+    "short_name": "Code Editor",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#101114",
+    "theme_color": "#101114",
+    "description": "A browser-based workspace for editing projects and working with Codex.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {
