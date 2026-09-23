@@ -200,6 +200,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _saving = false;
   bool _agentBusy = false;
   bool _agentStopping = false;
+  List<String> _agentActivity = const [];
+  String _streamedResponse = '';
   bool _codexConnected = false;
   GitStatus? _gitStatus;
   bool _gitBusy = false;
@@ -208,6 +210,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   String? _loginUrl;
   String? _loginCode;
   html.EventSource? _loginEvents;
+  html.EventSource? _agentEvents;
   final List<TerminalSession> _terminals = [];
   int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
   int? _activeTerminalId;
@@ -723,19 +726,81 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _agentBusy = true;
       _agentPrompt.clear();
       _messages = [..._messages, AgentMessage(role: 'user', text: prompt)];
+      _agentActivity = const ['Starting Codex…'];
+      _streamedResponse = '';
       _error = null;
     });
     _scrollMessages();
     try {
-      final response = await _request('POST', _projectUrl('/agent'), {
+      final started = await _request('POST', _projectUrl('/agent'), {
         'prompt': prompt,
       });
-      if (!mounted) return;
-      setState(() {
-        _messages = (response['messages'] as List<dynamic>? ?? const [])
-            .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
-            .toList();
+      final runId = started['runId'] as String?;
+      if (runId == null || runId.isEmpty) {
+        throw StateError('Agent run did not start.');
+      }
+      final completed = Completer<void>();
+      final source = html.EventSource('${_projectUrl('/agent/events')}/$runId');
+      _agentEvents = source;
+      source.onMessage.listen((event) {
+        final value = jsonDecode(event.data as String) as Map<String, dynamic>;
+        final type = value['type'] as String?;
+        if (!mounted) return;
+        if (type == 'activity') {
+          final activity = value['text']?.toString() ?? '';
+          if (activity.isNotEmpty) {
+            setState(() {
+              final next = [..._agentActivity, activity];
+              _agentActivity = next.length > 12
+                  ? next.sublist(next.length - 12)
+                  : next;
+            });
+            _scrollMessages();
+          }
+        } else if (type == 'response_delta') {
+          setState(() => _streamedResponse += value['text']?.toString() ?? '');
+          _scrollMessages();
+        } else if (type == 'complete') {
+          final messages = value['messages'];
+          setState(() {
+            if (messages is List<dynamic>) {
+              _messages = messages
+                  .map(
+                    (item) =>
+                        AgentMessage.fromJson(item as Map<String, dynamic>),
+                  )
+                  .toList();
+            } else if (_streamedResponse.isEmpty) {
+              _messages = [
+                ..._messages,
+                AgentMessage(
+                  role: 'assistant',
+                  text: value['response']?.toString() ?? 'Stopped.',
+                ),
+              ];
+            }
+          });
+          source.close();
+          if (!completed.isCompleted) completed.complete();
+        } else if (type == 'error') {
+          source.close();
+          if (!completed.isCompleted) {
+            completed.completeError(
+              StateError(value['error']?.toString() ?? 'Agent turn failed.'),
+            );
+          }
+        }
       });
+      source.onError.listen((_) {
+        if (!completed.isCompleted) {
+          completed.completeError(
+            StateError('Agent progress connection closed.'),
+          );
+        }
+      });
+      await completed.future;
+      _agentEvents = null;
+      if (!mounted) return;
       await _refreshTree();
       if (_path != null) await _openFile(_path!);
       await _refreshGitStatus();
@@ -743,10 +808,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     } catch (error) {
       _showError(error);
     } finally {
+      _agentEvents?.close();
+      _agentEvents = null;
       if (mounted) {
         setState(() {
           _agentBusy = false;
           _agentStopping = false;
+          _agentActivity = const [];
+          _streamedResponse = '';
         });
       }
     }
@@ -984,6 +1053,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   @override
   void dispose() {
     _loginEvents?.close();
+    _agentEvents?.close();
     _code.removeListener(_onEdit);
     _code.dispose();
     _agentPrompt.dispose();
@@ -1441,18 +1511,67 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   if (index == _messages.length) {
                     return Padding(
                       padding: EdgeInsets.all(12),
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                          Row(
+                            children: [
+                              SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 10),
+                              Text(
+                                _agentStopping
+                                    ? 'Stopping Codex…'
+                                    : 'Codex is working…',
+                              ),
+                            ],
                           ),
-                          SizedBox(width: 10),
-                          Text(
-                            _agentStopping
-                                ? 'Stopping Codex…'
-                                : 'Codex is working…',
-                          ),
+                          if (_agentActivity.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF161B22),
+                                border: Border.all(
+                                  color: const Color(0xFF30363D),
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: _agentActivity
+                                    .map(
+                                      (activity) => Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 4,
+                                        ),
+                                        child: Text('• $activity'),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ),
+                          ],
+                          if (_streamedResponse.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF161B22),
+                                border: Border.all(
+                                  color: const Color(0xFF30363D),
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: SelectableText(_streamedResponse),
+                            ),
+                          ],
                         ],
                       ),
                     );
