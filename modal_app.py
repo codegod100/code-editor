@@ -24,6 +24,7 @@ image = (
     .pip_install(
         "authlib==1.6.5",
         "fastapi[standard]==0.121.3",
+        "itsdangerous==2.2.0",
         "openai-codex==0.156.1",
     )
     .env(

@@ -33,7 +33,11 @@ class AgentWorkspaceApp extends StatelessWidget {
 }
 
 class ProjectSummary {
-  const ProjectSummary({required this.name, required this.isRepo, this.branch = ''});
+  const ProjectSummary({
+    required this.name,
+    required this.isRepo,
+    this.branch = '',
+  });
 
   factory ProjectSummary.fromJson(Map<String, dynamic> json) => ProjectSummary(
     name: json['name'] as String,
@@ -82,6 +86,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _saving = false;
   bool _agentBusy = false;
   bool _codexConnected = false;
+  String _userName = '';
+  String _userEmail = '';
   String? _loginUrl;
   String? _loginCode;
   html.EventSource? _loginEvents;
@@ -120,7 +126,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
     final status = response.status ?? 0;
     if (status < 200 || status >= 300) {
-      throw StateError(decoded['detail']?.toString() ?? 'Request failed ($status)');
+      throw StateError(
+        decoded['detail']?.toString() ?? 'Request failed ($status)',
+      );
     }
     return decoded;
   }
@@ -133,14 +141,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       final values = await Future.wait([
         _request('GET', '/api/projects'),
         _request('GET', '/api/codex/status'),
+        _request('GET', '/api/me'),
       ]);
-      final projectValues = (values[0]['projects'] as List<dynamic>? ?? const [])
-          .map((item) => ProjectSummary.fromJson(item as Map<String, dynamic>))
-          .toList();
+      final projectValues =
+          (values[0]['projects'] as List<dynamic>? ?? const [])
+              .map(
+                (item) => ProjectSummary.fromJson(item as Map<String, dynamic>),
+              )
+              .toList();
       if (!mounted) return;
       setState(() {
         _projects = projectValues;
         _codexConnected = values[1]['authenticated'] as bool? ?? false;
+        _userName = values[2]['name'] as String? ?? '';
+        _userEmail = values[2]['email'] as String? ?? '';
         _loading = false;
       });
       if (projectValues.isNotEmpty) await _selectProject(projectValues.first);
@@ -283,9 +297,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, [name.text.trim(), repo.text.trim()]),
+            onPressed: () =>
+                Navigator.pop(context, [name.text.trim(), repo.text.trim()]),
             child: const Text('Create'),
           ),
         ],
@@ -364,7 +382,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     });
     _scrollMessages();
     try {
-      final response = await _request('POST', _projectUrl('/agent'), {'prompt': prompt});
+      final response = await _request('POST', _projectUrl('/agent'), {
+        'prompt': prompt,
+      });
       if (!mounted) return;
       setState(() {
         _messages = (response['messages'] as List<dynamic>? ?? const [])
@@ -383,14 +403,23 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _resetAgent() async {
     if (_project == null || _agentBusy) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed =
+        await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Start a new agent thread?'),
-            content: const Text('The current project files stay intact. Conversation history is cleared.'),
+            content: const Text(
+              'The current project files stay intact. Conversation history is cleared.',
+            ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('New thread')),
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('New thread'),
+              ),
             ],
           ),
         ) ??
@@ -412,8 +441,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             title: const Text('Discard unsaved changes?'),
             content: Text(_path ?? ''),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Discard')),
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Discard'),
+              ),
             ],
           ),
         ) ??
@@ -423,6 +458,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void _showError(Object error) {
     if (!mounted) return;
     setState(() => _error = error.toString().replaceFirst('Bad state: ', ''));
+  }
+
+  void _logout() => html.window.location.assign('/auth/logout');
+
+  String get _userInitial {
+    final value = _userName.trim().isEmpty
+        ? _userEmail.trim()
+        : _userName.trim();
+    return value.isEmpty ? '?' : value.characters.first.toUpperCase();
   }
 
   void _scrollMessages() {
@@ -471,7 +515,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               MaterialBanner(
                 content: SelectableText(_error!),
                 actions: [
-                  TextButton(onPressed: () => setState(() => _error = null), child: const Text('Dismiss')),
+                  TextButton(
+                    onPressed: () => setState(() => _error = null),
+                    child: const Text('Dismiss'),
+                  ),
                 ],
               ),
             if (_loginCode != null) _buildLoginBanner(),
@@ -504,12 +551,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                       value: project,
                       child: Row(
                         children: [
-                          Icon(project.isRepo ? Icons.account_tree_outlined : Icons.folder_outlined, size: 18),
+                          Icon(
+                            project.isRepo
+                                ? Icons.account_tree_outlined
+                                : Icons.folder_outlined,
+                            size: 18,
+                          ),
                           const SizedBox(width: 8),
                           Text(project.name),
                           if (project.branch.isNotEmpty) ...[
                             const SizedBox(width: 8),
-                            Text(project.branch, style: Theme.of(context).textTheme.labelSmall),
+                            Text(
+                              project.branch,
+                              style: Theme.of(context).textTheme.labelSmall,
+                            ),
                           ],
                         ],
                       ),
@@ -531,14 +586,58 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ),
       const SizedBox(width: 8),
       Padding(
-        padding: const EdgeInsets.only(right: 12),
+        padding: const EdgeInsets.only(right: 4),
         child: _codexConnected
-            ? const Chip(avatar: Icon(Icons.check_circle, size: 16), label: Text('Codex connected'))
+            ? const Chip(
+                avatar: Icon(Icons.check_circle, size: 16),
+                label: Text('Codex connected'),
+              )
             : FilledButton.tonalIcon(
                 onPressed: _connectCodex,
                 icon: const Icon(Icons.link),
                 label: const Text('Connect Codex'),
               ),
+      ),
+      PopupMenuButton<String>(
+        tooltip: _userName.isEmpty ? 'Pocket ID account' : _userName,
+        onSelected: (value) {
+          if (value == 'logout') _logout();
+        },
+        itemBuilder: (context) => [
+          PopupMenuItem<String>(
+            enabled: false,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: CircleAvatar(child: Text(_userInitial)),
+              title: Text(_userName),
+              subtitle: _userEmail.isEmpty ? null : Text(_userEmail),
+            ),
+          ),
+          const PopupMenuDivider(),
+          const PopupMenuItem<String>(
+            value: 'logout',
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.logout),
+              title: Text('Log out'),
+            ),
+          ),
+        ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(radius: 14, child: Text(_userInitial)),
+              if (_userName.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Text(_userName),
+              ],
+              const SizedBox(width: 4),
+              const Icon(Icons.arrow_drop_down),
+            ],
+          ),
+        ),
       ),
     ],
   );
@@ -550,7 +649,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     ),
     actions: [
       FilledButton(
-        onPressed: _loginUrl == null ? null : () => html.window.open(_loginUrl!, 'codex-login'),
+        onPressed: _loginUrl == null
+            ? null
+            : () => html.window.open(_loginUrl!, 'codex-login'),
         child: const Text('Open sign-in'),
       ),
     ],
@@ -567,14 +668,21 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             children: [
               const Icon(Icons.folder_copy_outlined, size: 54),
               const SizedBox(height: 20),
-              Text('Open a durable workspace', style: Theme.of(context).textTheme.headlineSmall),
+              Text(
+                'Open a durable workspace',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
               const SizedBox(height: 10),
               const Text(
                 'Create a folder or clone a repository. Files and Codex threads are stored on the project disk and survive redeploys.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
-              FilledButton.icon(onPressed: _createProject, icon: const Icon(Icons.add), label: const Text('Add project')),
+              FilledButton.icon(
+                onPressed: _createProject,
+                icon: const Icon(Icons.add),
+                label: const Text('Add project'),
+              ),
             ],
           ),
         ),
@@ -589,8 +697,18 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           length: 3,
           child: Column(
             children: [
-              const TabBar(tabs: [Tab(text: 'Files'), Tab(text: 'Editor'), Tab(text: 'Agent')]),
-              Expanded(child: TabBarView(children: [_buildFiles(), _buildEditor(), _buildAgent()])),
+              const TabBar(
+                tabs: [
+                  Tab(text: 'Files'),
+                  Tab(text: 'Editor'),
+                  Tab(text: 'Agent'),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [_buildFiles(), _buildEditor(), _buildAgent()],
+                ),
+              ),
             ],
           ),
         );
@@ -610,7 +728,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Widget _panelHeader(String title, List<Widget> actions) => Container(
     height: 44,
     padding: const EdgeInsets.symmetric(horizontal: 12),
-    decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFF30363D)))),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+    ),
     child: Row(
       children: [
         Text(title, style: Theme.of(context).textTheme.labelLarge),
@@ -623,7 +743,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Widget _buildFiles() => Column(
     children: [
       _panelHeader('EXPLORER', [
-        IconButton(tooltip: 'Refresh', visualDensity: VisualDensity.compact, onPressed: _refreshTree, icon: const Icon(Icons.refresh, size: 18)),
+        IconButton(
+          tooltip: 'Refresh',
+          visualDensity: VisualDensity.compact,
+          onPressed: _refreshTree,
+          icon: const Icon(Icons.refresh, size: 18),
+        ),
       ]),
       Expanded(
         child: _files.isEmpty
@@ -636,10 +761,23 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   return ListTile(
                     dense: true,
                     selected: file == _path,
-                    contentPadding: EdgeInsets.only(left: 10.0 + depth * 10, right: 8),
+                    contentPadding: EdgeInsets.only(
+                      left: 10.0 + depth * 10,
+                      right: 8,
+                    ),
                     leading: const Icon(Icons.description_outlined, size: 17),
-                    title: Text(file.split('/').last, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-                    subtitle: depth == 0 ? null : Text(file, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10)),
+                    title: Text(
+                      file.split('/').last,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    subtitle: depth == 0
+                        ? null
+                        : Text(
+                            file,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 10),
+                          ),
                     onTap: () => _openFile(file),
                   );
                 },
@@ -650,12 +788,26 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildEditor() => Column(
     children: [
-      _panelHeader(_path == null ? 'EDITOR' : '${_path!}${_dirty ? ' •' : ''}', [
-        if (_saving)
-          const Padding(padding: EdgeInsets.all(10), child: SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2)))
-        else
-          IconButton(tooltip: 'Save (Ctrl/Cmd+S)', visualDensity: VisualDensity.compact, onPressed: _path == null ? null : _save, icon: const Icon(Icons.save_outlined, size: 18)),
-      ]),
+      _panelHeader(
+        _path == null ? 'EDITOR' : '${_path!}${_dirty ? ' •' : ''}',
+        [
+          if (_saving)
+            const Padding(
+              padding: EdgeInsets.all(10),
+              child: SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              tooltip: 'Save (Ctrl/Cmd+S)',
+              visualDensity: VisualDensity.compact,
+              onPressed: _path == null ? null : _save,
+              icon: const Icon(Icons.save_outlined, size: 18),
+            ),
+        ],
+      ),
       Expanded(
         child: _path == null
             ? const Center(child: Text('Select a file from the explorer'))
@@ -668,8 +820,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   maxLines: null,
                   minLines: null,
                   keyboardType: TextInputType.multiline,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13.5, height: 1.5),
-                  decoration: const InputDecoration(border: InputBorder.none, filled: false, contentPadding: EdgeInsets.zero),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 13.5,
+                    height: 1.5,
+                  ),
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    filled: false,
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ),
               ),
       ),
@@ -679,7 +839,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Widget _buildAgent() => Column(
     children: [
       _panelHeader('AGENT', [
-        IconButton(tooltip: 'New thread', visualDensity: VisualDensity.compact, onPressed: _resetAgent, icon: const Icon(Icons.add_comment_outlined, size: 18)),
+        IconButton(
+          tooltip: 'New thread',
+          visualDensity: VisualDensity.compact,
+          onPressed: _resetAgent,
+          icon: const Icon(Icons.add_comment_outlined, size: 18),
+        ),
       ]),
       Expanded(
         child: _messages.isEmpty
@@ -690,9 +855,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   children: [
                     const Icon(Icons.auto_awesome_outlined, size: 42),
                     const SizedBox(height: 16),
-                    Text('Ask Codex to work in ${_project?.name}', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      'Ask Codex to work in ${_project?.name}',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 8),
-                    const Text('It can inspect the repository, edit files, and run checks inside this project.', textAlign: TextAlign.center),
+                    const Text(
+                      'It can inspect the repository, edit files, and run checks inside this project.',
+                      textAlign: TextAlign.center,
+                    ),
                   ],
                 ),
               )
@@ -704,19 +876,32 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   if (index == _messages.length) {
                     return const Padding(
                       padding: EdgeInsets.all(12),
-                      child: Row(children: [SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 10), Text('Codex is working…')]),
+                      child: Row(
+                        children: [
+                          SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          SizedBox(width: 10),
+                          Text('Codex is working…'),
+                        ],
+                      ),
                     );
                   }
                   final message = _messages[index];
                   final user = message.role == 'user';
                   return Align(
-                    alignment: user ? Alignment.centerRight : Alignment.centerLeft,
+                    alignment: user
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
                     child: Container(
                       constraints: const BoxConstraints(maxWidth: 340),
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: user ? const Color(0xFF263659) : const Color(0xFF161B22),
+                        color: user
+                            ? const Color(0xFF263659)
+                            : const Color(0xFF161B22),
                         border: Border.all(color: const Color(0xFF30363D)),
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -728,7 +913,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ),
       Container(
         padding: const EdgeInsets.all(12),
-        decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFF30363D)))),
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Color(0xFF30363D))),
+        ),
         child: Column(
           children: [
             TextField(
@@ -736,13 +923,18 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               enabled: !_agentBusy,
               minLines: 2,
               maxLines: 6,
-              decoration: const InputDecoration(hintText: 'Ask Codex to change this project…'),
+              decoration: const InputDecoration(
+                hintText: 'Ask Codex to change this project…',
+              ),
               onSubmitted: (_) => _runAgent(),
             ),
             const SizedBox(height: 8),
             Row(
               children: [
-                Text(_codexConnected ? 'Workspace write' : 'Codex not connected', style: Theme.of(context).textTheme.labelSmall),
+                Text(
+                  _codexConnected ? 'Workspace write' : 'Codex not connected',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
                 const Spacer(),
                 FilledButton.icon(
                   onPressed: _agentBusy || _project == null ? null : _runAgent,
