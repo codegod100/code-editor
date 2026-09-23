@@ -63,6 +63,45 @@ class AgentMessage {
   final String text;
 }
 
+class GitChange {
+  const GitChange({required this.path, required this.index, required this.worktree});
+
+  factory GitChange.fromJson(Map<String, dynamic> json) => GitChange(
+    path: json['path'] as String? ?? '',
+    index: json['index'] as String? ?? ' ',
+    worktree: json['worktree'] as String? ?? ' ',
+  );
+
+  final String path;
+  final String index;
+  final String worktree;
+
+  String get label => index == '?' || worktree == '?' ? 'New' : index != ' ' ? 'Staged' : 'Modified';
+}
+
+class GitStatus {
+  const GitStatus({required this.isRepo, required this.files, this.branch = '', this.ahead = 0, this.behind = 0, this.hasRemote = false, this.prAvailable = false});
+
+  factory GitStatus.fromJson(Map<String, dynamic> json) => GitStatus(
+    isRepo: json['isRepo'] as bool? ?? false,
+    branch: json['branch'] as String? ?? '',
+    files: (json['files'] as List<dynamic>? ?? const []).map((item) => GitChange.fromJson(item as Map<String, dynamic>)).toList(),
+    ahead: json['ahead'] as int? ?? 0,
+    behind: json['behind'] as int? ?? 0,
+    hasRemote: json['hasRemote'] as bool? ?? false,
+    prAvailable: json['prAvailable'] as bool? ?? false,
+  );
+
+  final bool isRepo;
+  final String branch;
+  final List<GitChange> files;
+  final int ahead;
+  final int behind;
+  final bool hasRemote;
+  final bool prAvailable;
+  int get changedCount => files.length;
+}
+
 class FileTreeNode {
   FileTreeNode.directory(this.name, this.path)
     : isDirectory = true,
@@ -162,6 +201,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _agentBusy = false;
   bool _agentStopping = false;
   bool _codexConnected = false;
+  GitStatus? _gitStatus;
+  bool _gitBusy = false;
   String _userName = '';
   String _userEmail = '';
   String? _loginUrl;
@@ -281,7 +322,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _error = null;
     });
     try {
-      await Future.wait([_refreshTree(), _loadSession()]);
+      await Future.wait([_refreshTree(), _loadSession(), _refreshGitStatus()]);
     } catch (error) {
       _showError(error);
     } finally {
@@ -404,11 +445,97 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         'content': snapshot,
       });
       if (mounted) setState(() => _savedText = snapshot);
+      await _refreshGitStatus();
     } catch (error) {
       _showError(error);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _refreshGitStatus() async {
+    if (_project == null) return;
+    try {
+      final response = await _request('GET', _projectUrl('/git/status'));
+      if (mounted) setState(() => _gitStatus = GitStatus.fromJson(response));
+    } catch (error) {
+      if (mounted) setState(() => _gitStatus = null);
+    }
+  }
+
+  Future<void> _commitChanges() async {
+    final status = _gitStatus;
+    if (status == null || status.changedCount == 0 || _gitBusy) return;
+    final message = TextEditingController();
+    final value = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: Text('Commit ${status.changedCount} changed file${status.changedCount == 1 ? '' : 's'}'),
+      content: TextField(controller: message, autofocus: true, decoration: const InputDecoration(labelText: 'Commit message', hintText: 'Describe this change')),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, message.text.trim()), child: const Text('Commit'))],
+    ));
+    message.dispose();
+    if (value == null || value.isEmpty) return;
+    await _runGitAction('/git/commit', {'message': value}, 'Commit created');
+  }
+
+  Future<void> _pushChanges() async {
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Push branch?'), content: Text('Push ${_gitStatus?.branch ?? 'this branch'} to its origin remote.'),
+      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Push'))],
+    ));
+    if (confirmed == true) await _runGitAction('/git/push', null, 'Branch pushed');
+  }
+
+  Future<void> _createPullRequest() async {
+    final title = TextEditingController(); final base = TextEditingController(text: 'main'); final description = TextEditingController();
+    final values = await showDialog<List<String>>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Create pull request'), content: SizedBox(width: 440, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: title, autofocus: true, decoration: const InputDecoration(labelText: 'Title')),
+        const SizedBox(height: 12), TextField(controller: base, decoration: const InputDecoration(labelText: 'Base branch')),
+        const SizedBox(height: 12), TextField(controller: description, minLines: 3, maxLines: 6, decoration: const InputDecoration(labelText: 'Description')),
+      ])), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, [title.text.trim(), base.text.trim(), description.text.trim()]), child: const Text('Create PR'))],
+    ));
+    title.dispose(); base.dispose(); description.dispose();
+    if (values == null || values.any((value) => value.isEmpty)) return;
+    final autoMergeMethod = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Merge after checks pass?'),
+      content: const Text('Enable GitHub auto-merge now, or create the pull request without it.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, ''), child: const Text('Create PR only')),
+        TextButton(onPressed: () => Navigator.pop(context, 'merge'), child: const Text('Auto: merge commit')),
+        TextButton(onPressed: () => Navigator.pop(context, 'rebase'), child: const Text('Auto: rebase')),
+        FilledButton(onPressed: () => Navigator.pop(context, 'squash'), child: const Text('Auto: squash')),
+      ],
+    ));
+    if (autoMergeMethod == null) return;
+    await _runGitAction('/git/pull-request', {'title': values[0], 'base': values[1], 'description': values[2], 'autoMergeMethod': autoMergeMethod}, autoMergeMethod.isEmpty ? 'Pull request created' : 'Pull request created with auto-merge');
+  }
+
+  Future<void> _enableAutoMerge() async {
+    final method = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Enable auto-merge'),
+      content: const Text('GitHub will merge this branch only after all required checks and branch protections pass. Choose the merge method.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context, 'merge'), child: const Text('Create merge commit')),
+        TextButton(onPressed: () => Navigator.pop(context, 'rebase'), child: const Text('Rebase')),
+        FilledButton(onPressed: () => Navigator.pop(context, 'squash'), child: const Text('Squash')),
+      ],
+    ));
+    if (method == null) return;
+    await _runGitAction('/git/pull-request/auto-merge', {'method': method}, 'Auto-merge enabled');
+  }
+
+  Future<void> _runGitAction(String endpoint, Map<String, dynamic>? body, String success) async {
+    if (_project == null || _gitBusy) return;
+    setState(() => _gitBusy = true);
+    try {
+      final response = await _request('POST', _projectUrl(endpoint), body);
+      await _refreshGitStatus();
+      if (response['url'] is String && mounted) {
+        _showError('$success: ${response['url']}');
+      }
+    } catch (error) { _showError(error); }
+    finally { if (mounted) setState(() => _gitBusy = false); }
   }
 
   Future<void> _createProject() async {
@@ -611,6 +738,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       });
       await _refreshTree();
       if (_path != null) await _openFile(_path!);
+      await _refreshGitStatus();
       _scrollMessages();
     } catch (error) {
       _showError(error);
@@ -1262,6 +1390,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     children: [
       _panelHeader('AGENT', [
         IconButton(
+          tooltip: 'Refresh source control',
+          visualDensity: VisualDensity.compact,
+          onPressed: _project?.isRepo == true && !_gitBusy ? _refreshGitStatus : null,
+          icon: const Icon(Icons.sync_outlined, size: 18),
+        ),
+        IconButton(
           tooltip: _agentStopping ? 'Stopping agent' : 'Stop agent',
           visualDensity: VisualDensity.compact,
           onPressed: _agentBusy && !_agentStopping ? _stopAgent : null,
@@ -1275,7 +1409,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ),
       ]),
       Expanded(
-        child: _messages.isEmpty
+        child: Column(
+          children: [
+            if (_gitStatus?.isRepo == true) _buildSourceControl(),
+            Expanded(child: _messages.isEmpty
             ? Padding(
                 padding: const EdgeInsets.all(24),
                 child: Column(
@@ -1341,7 +1478,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                     ),
                   );
                 },
-              ),
+              )),
+          ],
+        ),
       ),
       Container(
         padding: const EdgeInsets.all(12),
@@ -1405,6 +1544,45 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ),
     ],
   );
+
+  Widget _buildSourceControl() {
+    final status = _gitStatus!;
+    final primary = status.changedCount > 0
+        ? _commitChanges
+        : status.ahead > 0
+        ? _pushChanges
+        : null;
+    final primaryLabel = status.changedCount > 0
+        ? 'Commit ${status.changedCount}'
+        : status.ahead > 0
+        ? 'Push ${status.ahead}'
+        : 'Up to date';
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 230),
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFF30363D)))),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
+          child: Row(children: [
+            const Icon(Icons.account_tree_outlined, size: 17), const SizedBox(width: 8),
+            Expanded(child: Text(status.branch.isEmpty ? 'Detached HEAD' : status.branch, style: Theme.of(context).textTheme.labelLarge)),
+            if (status.behind > 0) Text('↓${status.behind}', style: const TextStyle(color: Color(0xFFE3B341))),
+            if (status.ahead > 0) Text(' ↑${status.ahead}', style: const TextStyle(color: Color(0xFF7EE787))),
+          ]),
+        ),
+        if (status.files.isNotEmpty) Flexible(child: ListView.builder(shrinkWrap: true, itemCount: status.files.length, itemBuilder: (context, index) {
+          final change = status.files[index];
+          return ListTile(dense: true, visualDensity: VisualDensity.compact, leading: Text(change.label.substring(0, 1), style: const TextStyle(color: Color(0xFFE3B341))), title: Text(change.path, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)), trailing: Text(change.label, style: Theme.of(context).textTheme.labelSmall));
+        })),
+        Padding(padding: const EdgeInsets.fromLTRB(12, 6, 12, 10), child: Row(children: [
+          Expanded(child: FilledButton.icon(onPressed: _gitBusy ? null : primary, icon: Icon(status.changedCount > 0 ? Icons.commit : Icons.cloud_upload_outlined, size: 17), label: Text(primaryLabel))),
+          const SizedBox(width: 8),
+          IconButton(tooltip: 'Create pull request', onPressed: _gitBusy || !status.hasRemote || !status.prAvailable || status.changedCount > 0 || status.ahead == 0 ? null : _createPullRequest, icon: const Icon(Icons.call_merge_outlined, size: 19)),
+          IconButton(tooltip: 'Enable auto-merge for this branch\'s pull request', onPressed: _gitBusy || !status.hasRemote || !status.prAvailable || status.changedCount > 0 ? null : _enableAutoMerge, icon: const Icon(Icons.merge_type_outlined, size: 19)),
+        ])),
+      ]),
+    );
+  }
 }
 
 class SaveIntent extends Intent {

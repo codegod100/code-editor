@@ -20,7 +20,7 @@ image = (
     modal.Image.from_registry(
         "ghcr.io/cirruslabs/flutter:stable", add_python="3.12"
     )
-    .apt_install("bash", "git")
+    .apt_install("bash", "git", "gh")
     .pip_install(
         "authlib==1.6.5",
         "fastapi[standard]==0.121.3",
@@ -197,6 +197,48 @@ def serve():
             return result.stderr.strip() or result.stdout.strip()
         return result.stdout.strip()
 
+    def git_result(project: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(project), *args], text=True, capture_output=True, timeout=timeout
+        )
+
+    def git_error(result: subprocess.CompletedProcess, fallback: str) -> str:
+        return result.stderr.strip() or result.stdout.strip() or fallback
+
+    def git_status(project: Path) -> dict:
+        if not (project / ".git").exists():
+            return {"isRepo": False, "files": [], "changedCount": 0}
+        status = git_result(project, "status", "--porcelain=v1", "--branch")
+        if status.returncode:
+            raise HTTPException(500, git_error(status, "could not read Git status"))
+        lines = status.stdout.splitlines()
+        header = lines[0] if lines and lines[0].startswith("## ") else ""
+        branch = header[3:].split("...")[0].split(" ")[0]
+        ahead = behind = 0
+        match = re.search(r"\[ahead (\d+)(?:, behind (\d+))?\]", header)
+        if match:
+            ahead, behind = int(match.group(1)), int(match.group(2) or 0)
+        else:
+            match = re.search(r"\[behind (\d+)\]", header)
+            if match:
+                behind = int(match.group(1))
+        files = []
+        for line in lines[1:]:
+            if len(line) < 4:
+                continue
+            files.append({"path": line[3:], "index": line[0], "worktree": line[1]})
+        remote = git_result(project, "remote", "get-url", "origin")
+        return {
+            "isRepo": True,
+            "branch": branch,
+            "files": files,
+            "changedCount": len(files),
+            "ahead": ahead,
+            "behind": behind,
+            "hasRemote": remote.returncode == 0,
+            "prAvailable": shutil.which("gh") is not None,
+        }
+
     @api.get("/api/projects")
     async def list_projects():
         root.mkdir(parents=True, exist_ok=True)
@@ -318,6 +360,102 @@ def serve():
             target.write_bytes(encoded)
             await commit()
         return {"saved": True, "path": path, "bytes": len(encoded)}
+
+    @api.get("/api/projects/{name}/git/status")
+    async def get_git_status(name: str):
+        return git_status(project_dir(name))
+
+    @api.post("/api/projects/{name}/git/commit")
+    async def create_commit(name: str, request: Request):
+        project = project_dir(name)
+        message = str((await request.json()).get("message", "")).strip()
+        if not message:
+            raise HTTPException(400, "commit message is required")
+        if not git_status(project)["isRepo"]:
+            raise HTTPException(400, "this project is not a Git repository")
+        async with mutation_lock:
+            add = await asyncio.to_thread(git_result, project, "add", "-A")
+            if add.returncode:
+                raise HTTPException(400, git_error(add, "could not stage changes"))
+            commit_result = await asyncio.to_thread(git_result, project, "commit", "-m", message)
+            if commit_result.returncode:
+                raise HTTPException(400, git_error(commit_result, "could not create commit"))
+            await commit()
+        return {"message": commit_result.stdout.strip(), "status": git_status(project)}
+
+    @api.post("/api/projects/{name}/git/push")
+    async def push_branch(name: str):
+        project = project_dir(name)
+        status = git_status(project)
+        if not status["isRepo"] or not status["hasRemote"]:
+            raise HTTPException(400, "this branch has no origin remote")
+        async with mutation_lock:
+            result = await asyncio.to_thread(git_result, project, "push")
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not push branch"))
+            await commit()
+        return {"message": result.stdout.strip() or "Pushed", "status": git_status(project)}
+
+    @api.post("/api/projects/{name}/git/pull-request")
+    async def create_pull_request(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        title = str(body.get("title", "")).strip()
+        base = str(body.get("base", "")).strip()
+        description = str(body.get("description", "")).strip()
+        auto_merge_method = str(body.get("autoMergeMethod", "")).strip()
+        if not title or not base or not description:
+            raise HTTPException(400, "pull request title, base branch, and description are required")
+        if not shutil.which("gh"):
+            raise HTTPException(503, "GitHub CLI is unavailable in this deployment")
+        method_flag = {"merge": "--merge", "rebase": "--rebase", "squash": "--squash"}.get(auto_merge_method)
+        if auto_merge_method and method_flag is None:
+            raise HTTPException(400, "auto-merge method must be merge, rebase, or squash")
+        async with mutation_lock:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["gh", "pr", "create", "--title", title, "--body", description, "--base", base],
+                cwd=str(project), text=True, capture_output=True, timeout=60,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not create pull request"))
+            if method_flag is not None:
+                auto_merge = await asyncio.to_thread(
+                    subprocess.run,
+                    ["gh", "pr", "merge", "--auto", method_flag],
+                    cwd=str(project), text=True, capture_output=True, timeout=60,
+                )
+                if auto_merge.returncode:
+                    raise HTTPException(
+                        400,
+                        "pull request was created, but auto-merge could not be enabled: "
+                        + git_error(auto_merge, "unknown error"),
+                    )
+            await commit()
+        return {"url": result.stdout.strip(), "autoMergeEnabled": method_flag is not None, "status": git_status(project)}
+
+    @api.post("/api/projects/{name}/git/pull-request/auto-merge")
+    async def enable_auto_merge(name: str, request: Request):
+        project = project_dir(name)
+        method = str((await request.json()).get("method", "")).strip()
+        method_flag = {"merge": "--merge", "rebase": "--rebase", "squash": "--squash"}.get(method)
+        if method_flag is None:
+            raise HTTPException(400, "merge method must be merge, rebase, or squash")
+        status = git_status(project)
+        if not status["isRepo"] or not status["hasRemote"]:
+            raise HTTPException(400, "this branch has no origin remote")
+        if not shutil.which("gh"):
+            raise HTTPException(503, "GitHub CLI is unavailable in this deployment")
+        async with mutation_lock:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["gh", "pr", "merge", "--auto", method_flag],
+                cwd=str(project), text=True, capture_output=True, timeout=60,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not enable auto-merge"))
+            await commit()
+        return {"message": result.stdout.strip() or "Auto-merge enabled", "status": git_status(project)}
 
     @api.get("/api/projects/{name}/session")
     async def get_session(name: str):
