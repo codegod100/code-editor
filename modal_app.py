@@ -253,6 +253,25 @@ def serve():
             await commit()
         return {"name": name, "isRepo": bool(repo_url)}
 
+    @api.patch("/api/projects/{name}")
+    async def rename_project(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        new_name = str(body.get("name", "")).strip()
+        if not project_name.fullmatch(new_name) or new_name in reserved:
+            raise HTTPException(400, "project name must use letters, numbers, ., _, or -")
+        if new_name == name:
+            return {"name": name}
+        async with mutation_lock:
+            if name in active_turns:
+                raise HTTPException(409, "stop the active agent turn before renaming")
+            destination = root / new_name
+            if destination.exists():
+                raise HTTPException(409, "project already exists")
+            os.replace(project, destination)
+            await commit()
+        return {"name": new_name}
+
     @api.get("/api/projects/{name}/tree")
     async def file_tree(name: str):
         project = project_dir(name)
