@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
@@ -165,78 +164,6 @@ class FileTreeNode {
   final List<FileTreeNode> children;
 }
 
-class SyntaxRange {
-  const SyntaxRange({
-    required this.start,
-    required this.end,
-    required this.kind,
-  });
-
-  factory SyntaxRange.fromJson(Map<Object?, Object?> json) => SyntaxRange(
-    start: json['start'] as int,
-    end: json['end'] as int,
-    kind: json['kind'] as String,
-  );
-
-  final int start;
-  final int end;
-  final String kind;
-}
-
-class SyntaxHighlightingController extends TextEditingController {
-  SyntaxHighlightingController({super.text});
-
-  List<SyntaxRange> _ranges = const [];
-
-  void setRanges(List<SyntaxRange> ranges) {
-    _ranges = ranges;
-    notifyListeners();
-  }
-
-  @override
-  TextSpan buildTextSpan({
-    required BuildContext context,
-    TextStyle? style,
-    required bool withComposing,
-  }) {
-    final children = <TextSpan>[];
-    var cursor = 0;
-    for (final range in _ranges) {
-      if (range.start < cursor || range.end > text.length) continue;
-      if (range.start > cursor) {
-        children.add(TextSpan(text: text.substring(cursor, range.start)));
-      }
-      children.add(
-        TextSpan(
-          text: text.substring(range.start, range.end),
-          style: _styleFor(range.kind),
-        ),
-      );
-      cursor = range.end;
-    }
-    if (cursor < text.length)
-      children.add(TextSpan(text: text.substring(cursor)));
-    return TextSpan(style: style, children: children);
-  }
-
-  TextStyle _styleFor(String kind) => switch (kind) {
-    'comment' => const TextStyle(
-      color: Color(0xFF8B949E),
-      fontStyle: FontStyle.italic,
-    ),
-    'string' => const TextStyle(color: Color(0xFFA5D6FF)),
-    'escape' => const TextStyle(color: Color(0xFFFFC680)),
-    'number' => const TextStyle(color: Color(0xFF79C0FF)),
-    'constant' => const TextStyle(color: Color(0xFFFF7B72)),
-    'keyword' => const TextStyle(
-      color: Color(0xFFFF7B72),
-      fontWeight: FontWeight.w600,
-    ),
-    'definition' => const TextStyle(color: Color(0xFFD2A8FF)),
-    _ => const TextStyle(color: Color(0xFFE6EDF3)),
-  };
-}
-
 const _terminalViewType = 'libghostty-terminal';
 bool _terminalViewRegistered = false;
 
@@ -303,7 +230,7 @@ class WorkspaceScreen extends StatefulWidget {
 }
 
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
-  final _code = SyntaxHighlightingController();
+  final _code = TextEditingController();
   final _agentPrompt = TextEditingController();
   final _editorFocus = FocusNode();
   final _messagesScroll = ScrollController();
@@ -338,10 +265,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
   int? _activeTerminalId;
   double _terminalHeight = 300;
-  Timer? _highlightTimer;
-  int _highlightRequest = 0;
-  bool _applyingSyntaxHighlights = false;
-
   bool get _dirty => _path != null && _code.text != _savedText;
 
   @override
@@ -352,71 +275,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   void _onEdit() {
-    if (_applyingSyntaxHighlights) return;
-    _scheduleSyntaxHighlighting();
     if (mounted) setState(() {});
-  }
-
-  void _scheduleSyntaxHighlighting() {
-    _highlightTimer?.cancel();
-    final request = ++_highlightRequest;
-    _highlightTimer = Timer(const Duration(milliseconds: 120), () async {
-      final language = _languageForPath(_path);
-      if (language == null || _code.text.isEmpty) {
-        _applySyntaxRanges(request, const []);
-        return;
-      }
-      try {
-        final bridge = js_util.getProperty<Object?>(
-          html.window,
-          'TreeSitterHighlighter',
-        );
-        if (bridge == null) {
-          throw StateError('Tree-sitter assets were not loaded');
-        }
-        final promise = js_util.callMethod<Object>(bridge, 'highlight', [
-          _code.text,
-          language,
-        ]);
-        final rawRanges = await js_util.promiseToFuture<Object?>(promise);
-        final values = js_util.dartify(rawRanges) as List<Object?>;
-        _applySyntaxRanges(
-          request,
-          values
-              .map(
-                (value) => SyntaxRange.fromJson(
-                  js_util.dartify(value) as Map<Object?, Object?>,
-                ),
-              )
-              .toList(),
-        );
-      } catch (error) {
-        if (request == _highlightRequest) _showError(error);
-      }
-    });
-  }
-
-  String? _languageForPath(String? path) {
-    if (path == null) return null;
-    final extension = path.split('.').last.toLowerCase();
-    return switch (extension) {
-      'js' || 'mjs' || 'cjs' || 'jsx' => 'javascript',
-      'ts' => 'typescript',
-      'tsx' => 'tsx',
-      'json' => 'json',
-      'py' => 'python',
-      'html' || 'htm' => 'html',
-      'css' => 'css',
-      'sh' || 'bash' || 'zsh' => 'bash',
-      _ => null,
-    };
-  }
-
-  void _applySyntaxRanges(int request, List<SyntaxRange> ranges) {
-    if (!mounted || request != _highlightRequest) return;
-    _applyingSyntaxHighlights = true;
-    _code.setRanges(ranges);
-    _applyingSyntaxHighlights = false;
   }
 
   Future<Map<String, dynamic>> _request(
@@ -1792,7 +1651,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     _loginEvents?.close();
     _agentEvents?.close();
     _freeqPoller?.cancel();
-    _highlightTimer?.cancel();
     _code.removeListener(_onEdit);
     _code.dispose();
     _agentPrompt.dispose();
