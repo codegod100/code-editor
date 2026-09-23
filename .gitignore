@@ -46,3 +46,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Locally generated Tree-sitter build inputs and browser artifacts.
+node_modules/
+web/assets/tree-sitter/
