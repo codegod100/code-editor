@@ -1,0 +1,9 @@
+{
+  "name": "cloud-code-editor-freeq-handoff",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@freeq/bot-kit": "0.1.0",
+    "@freeq/sdk": "0.1.0"
+  }
+}

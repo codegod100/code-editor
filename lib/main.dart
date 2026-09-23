@@ -66,8 +66,38 @@ class AgentMessage {
   final String text;
 }
 
+class FreeqBot {
+  const FreeqBot({
+    required this.did,
+    required this.name,
+    required this.description,
+    required this.capabilities,
+    this.version = '',
+  });
+
+  factory FreeqBot.fromJson(Map<String, dynamic> json) => FreeqBot(
+    did: json['did'] as String? ?? '',
+    name: json['name'] as String? ?? 'Unknown bot',
+    description: json['description'] as String? ?? '',
+    capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
+        .map((value) => value.toString())
+        .toList(),
+    version: json['version'] as String? ?? '',
+  );
+
+  final String did;
+  final String name;
+  final String description;
+  final List<String> capabilities;
+  final String version;
+}
+
 class GitChange {
-  const GitChange({required this.path, required this.index, required this.worktree});
+  const GitChange({
+    required this.path,
+    required this.index,
+    required this.worktree,
+  });
 
   factory GitChange.fromJson(Map<String, dynamic> json) => GitChange(
     path: json['path'] as String? ?? '',
@@ -79,16 +109,30 @@ class GitChange {
   final String index;
   final String worktree;
 
-  String get label => index == '?' || worktree == '?' ? 'New' : index != ' ' ? 'Staged' : 'Modified';
+  String get label => index == '?' || worktree == '?'
+      ? 'New'
+      : index != ' '
+      ? 'Staged'
+      : 'Modified';
 }
 
 class GitStatus {
-  const GitStatus({required this.isRepo, required this.files, this.branch = '', this.ahead = 0, this.behind = 0, this.hasRemote = false, this.prAvailable = false});
+  const GitStatus({
+    required this.isRepo,
+    required this.files,
+    this.branch = '',
+    this.ahead = 0,
+    this.behind = 0,
+    this.hasRemote = false,
+    this.prAvailable = false,
+  });
 
   factory GitStatus.fromJson(Map<String, dynamic> json) => GitStatus(
     isRepo: json['isRepo'] as bool? ?? false,
     branch: json['branch'] as String? ?? '',
-    files: (json['files'] as List<dynamic>? ?? const []).map((item) => GitChange.fromJson(item as Map<String, dynamic>)).toList(),
+    files: (json['files'] as List<dynamic>? ?? const [])
+        .map((item) => GitChange.fromJson(item as Map<String, dynamic>))
+        .toList(),
     ahead: json['ahead'] as int? ?? 0,
     behind: json['behind'] as int? ?? 0,
     hasRemote: json['hasRemote'] as bool? ?? false,
@@ -195,6 +239,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   List<String> _files = const [];
   final Set<String> _expandedDirectories = {};
   List<AgentMessage> _messages = const [];
+  List<Map<String, dynamic>> _freeqHandoffs = const [];
   ProjectSummary? _project;
   String? _path;
   String _savedText = '';
@@ -215,6 +260,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   String? _loginCode;
   html.EventSource? _loginEvents;
   html.EventSource? _agentEvents;
+  Timer? _freeqPoller;
   final List<TerminalSession> _terminals = [];
   int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
   int? _activeTerminalId;
@@ -325,6 +371,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _files = const [];
       _expandedDirectories.clear();
       _messages = const [];
+      _freeqHandoffs = const [];
       _loading = true;
       _error = null;
     });
@@ -354,8 +401,240 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _messages = (response['messages'] as List<dynamic>? ?? const [])
           .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
           .toList();
+      _freeqHandoffs = (response['handoffs'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList();
     });
+    _ensureFreeqPolling();
     _scrollMessages();
+  }
+
+  void _ensureFreeqPolling() {
+    _freeqPoller?.cancel();
+    if (_project == null ||
+        !_freeqHandoffs.any(
+          (item) =>
+              !{'complete', 'fail', 'decline', 'timeout'}.contains(
+                item['status'],
+              ),
+        ))
+      return;
+    _freeqPoller = Timer.periodic(const Duration(seconds: 5), (_) async {
+      final project = _project;
+      if (project == null) return;
+      final pending = _freeqHandoffs
+          .where(
+            (item) =>
+                !{'complete', 'fail', 'decline', 'timeout'}.contains(
+                  item['status'],
+                ),
+          )
+          .toList();
+      for (final handoff in pending) {
+        final taskId = handoff['taskId']?.toString();
+        if (taskId == null || taskId.isEmpty) continue;
+        try {
+          final update = await _request(
+            'GET',
+            '/api/projects/${Uri.encodeComponent(project.name)}/freeq/handoffs/${Uri.encodeComponent(taskId)}',
+          );
+          if (!mounted) return;
+          setState(() {
+            _freeqHandoffs = _freeqHandoffs
+                .map(
+                  (item) =>
+                      item['taskId'] == taskId ? {...item, ...update} : item,
+                )
+                .toList();
+          });
+          if ({'complete', 'fail', 'decline', 'timeout'}.contains(update['status'])) {
+            await _loadSession();
+          }
+        } catch (_) {
+          // A temporary discovery outage should not discard an in-flight task.
+        }
+      }
+      _ensureFreeqPolling();
+    });
+  }
+
+  Future<void> _openFreeqHandoff() async {
+    if (_project == null || _agentBusy) return;
+    final server = TextEditingController(text: 'wss://irc.freeq.at/irc');
+    final channel = TextEditingController(text: '#tasks');
+    final task = TextEditingController(text: _agentPrompt.text);
+    final context = TextEditingController();
+    List<FreeqBot> bots = const [];
+    List<String> capabilities = const [];
+    String? capability;
+    String? discoveryError;
+    bool discovering = true;
+    bool discoveryStarted = false;
+    Future<void> discover(StateSetter setDialogState) async {
+      setDialogState(() {
+        discovering = true;
+        discoveryError = null;
+      });
+      try {
+        final response = await _request(
+          'GET',
+          '/api/freeq/bots?server=${Uri.encodeQueryComponent(server.text.trim())}',
+        );
+        bots = (response['bots'] as List<dynamic>? ?? const [])
+            .map((item) => FreeqBot.fromJson(item as Map<String, dynamic>))
+            .where((bot) => bot.did.isNotEmpty && bot.capabilities.isNotEmpty)
+            .toList();
+        capabilities = bots
+            .expand((bot) => bot.capabilities)
+            .toSet()
+            .toList()
+          ..sort();
+        capability = capabilities.isEmpty ? null : capabilities.first;
+      } catch (error) {
+        discoveryError = error.toString();
+      } finally {
+        setDialogState(() => discovering = false);
+      }
+    }
+
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          if (!discoveryStarted) {
+            discoveryStarted = true;
+            unawaited(discover(setDialogState));
+          }
+          return AlertDialog(
+            title: const Text('Hand off to a FreeQ bot'),
+            content: SizedBox(
+              width: 520,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: server,
+                      readOnly: true,
+                      decoration: const InputDecoration(
+                        labelText: 'FreeQ server (canonical)',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: channel,
+                      decoration: const InputDecoration(labelText: 'Channel'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: task,
+                      maxLines: 2,
+                      onChanged: (_) => setDialogState(() {}),
+                      decoration: const InputDecoration(labelText: 'Task'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: context,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: 'Context for the bot (optional)',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (discovering) const LinearProgressIndicator(),
+                    if (discoveryError != null)
+                      Text(
+                        discoveryError!,
+                        style: const TextStyle(color: Color(0xFFFF7B72)),
+                      ),
+                    if (!discovering && discoveryError == null) ...[
+                      DropdownButtonFormField<String>(
+                        value: capability,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Capability offered in this channel',
+                        ),
+                        items: capabilities
+                            .map(
+                              (item) => DropdownMenuItem(
+                                value: item,
+                                child: Text(
+                                  item,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (item) =>
+                            setDialogState(() => capability = item),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          '${bots.length} published bot${bots.length == 1 ? '' : 's'} discovered. This is an open offer: any bot in the selected channel that supports the capability may claim it.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: discovering ? null : () => discover(setDialogState),
+                child: const Text('Refresh bots'),
+              ),
+              FilledButton(
+                onPressed: capability == null || task.text.trim().isEmpty
+                    ? null
+                    : () => Navigator.pop(dialogContext, true),
+                child: const Text('Hand off'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (accepted != true || capability == null) {
+      server.dispose();
+      channel.dispose();
+      task.dispose();
+      context.dispose();
+      return;
+    }
+    try {
+      final handoff = await _request('POST', _projectUrl('/freeq/handoffs'), {
+        'server': server.text.trim(),
+        'channel': channel.text.trim(),
+        'capability': capability,
+        'title': task.text.trim(),
+        'context': context.text.trim(),
+      });
+      if (!mounted) return;
+      setState(() {
+        _freeqHandoffs = [..._freeqHandoffs, handoff];
+        _messages = [
+          ..._messages,
+          AgentMessage(
+            role: 'user',
+            text: 'Open FreeQ handoff in ${channel.text.trim()}: ${task.text.trim()}',
+          ),
+        ];
+      });
+      _ensureFreeqPolling();
+      _scrollMessages();
+    } catch (error) {
+      _showError(error);
+    }
+    server.dispose();
+    channel.dispose();
+    task.dispose();
+    context.dispose();
   }
 
   Future<void> _openFile(String path) async {
@@ -482,22 +761,44 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text(branch.isEmpty ? 'Current work thread diff' : 'Current work thread diff — $branch'),
+          title: Text(
+            branch.isEmpty
+                ? 'Current work thread diff'
+                : 'Current work thread diff — $branch',
+          ),
           content: SizedBox(
             width: 900,
             height: 560,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (truncated) const Padding(padding: EdgeInsets.only(bottom: 12), child: Text('Diff is truncated at 2 MiB.')),
-                Expanded(child: SelectionArea(child: SingleChildScrollView(child: Text(
-                  diff.isEmpty ? 'No changes in this work thread.' : diff,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                )))),
+                if (truncated)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: Text('Diff is truncated at 2 MiB.'),
+                  ),
+                Expanded(
+                  child: SelectionArea(
+                    child: SingleChildScrollView(
+                      child: Text(
+                        diff.isEmpty ? 'No changes in this work thread.' : diff,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
         ),
       );
     } catch (error) {
@@ -511,65 +812,195 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     final status = _gitStatus;
     if (status == null || status.changedCount == 0 || _gitBusy) return;
     final message = TextEditingController();
-    final value = await showDialog<String>(context: context, builder: (context) => AlertDialog(
-      title: Text('Commit ${status.changedCount} changed file${status.changedCount == 1 ? '' : 's'}'),
-      content: TextField(controller: message, autofocus: true, decoration: const InputDecoration(labelText: 'Commit message', hintText: 'Describe this change')),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, message.text.trim()), child: const Text('Commit'))],
-    ));
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          'Commit ${status.changedCount} changed file${status.changedCount == 1 ? '' : 's'}',
+        ),
+        content: TextField(
+          controller: message,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Commit message',
+            hintText: 'Describe this change',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, message.text.trim()),
+            child: const Text('Commit'),
+          ),
+        ],
+      ),
+    );
     message.dispose();
     if (value == null || value.isEmpty) return;
     await _runGitAction('/git/commit', {'message': value}, 'Commit created');
   }
 
   Future<void> _pushChanges() async {
-    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Push branch?'), content: Text('Push ${_gitStatus?.branch ?? 'this branch'} to its origin remote.'),
-      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Push'))],
-    ));
-    if (confirmed == true) await _runGitAction('/git/push', null, 'Branch pushed');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Push branch?'),
+        content: Text(
+          'Push ${_gitStatus?.branch ?? 'this branch'} to its origin remote.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Push'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true)
+      await _runGitAction('/git/push', null, 'Branch pushed');
   }
 
   Future<void> _createPullRequest() async {
-    final title = TextEditingController(); final base = TextEditingController(text: 'main'); final description = TextEditingController();
-    final values = await showDialog<List<String>>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Create pull request'), content: SizedBox(width: 440, child: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: title, autofocus: true, decoration: const InputDecoration(labelText: 'Title')),
-        const SizedBox(height: 12), TextField(controller: base, decoration: const InputDecoration(labelText: 'Base branch')),
-        const SizedBox(height: 12), TextField(controller: description, minLines: 3, maxLines: 6, decoration: const InputDecoration(labelText: 'Description')),
-      ])), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, [title.text.trim(), base.text.trim(), description.text.trim()]), child: const Text('Create PR'))],
-    ));
-    title.dispose(); base.dispose(); description.dispose();
+    final title = TextEditingController();
+    final base = TextEditingController(text: 'main');
+    final description = TextEditingController();
+    final values = await showDialog<List<String>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create pull request'),
+        content: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: title,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Title'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: base,
+                decoration: const InputDecoration(labelText: 'Base branch'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: description,
+                minLines: 3,
+                maxLines: 6,
+                decoration: const InputDecoration(labelText: 'Description'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, [
+              title.text.trim(),
+              base.text.trim(),
+              description.text.trim(),
+            ]),
+            child: const Text('Create PR'),
+          ),
+        ],
+      ),
+    );
+    title.dispose();
+    base.dispose();
+    description.dispose();
     if (values == null || values.any((value) => value.isEmpty)) return;
-    final autoMergeMethod = await showDialog<String>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Merge after checks pass?'),
-      content: const Text('Enable GitHub auto-merge now, or create the pull request without it.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context, ''), child: const Text('Create PR only')),
-        TextButton(onPressed: () => Navigator.pop(context, 'merge'), child: const Text('Auto: merge commit')),
-        TextButton(onPressed: () => Navigator.pop(context, 'rebase'), child: const Text('Auto: rebase')),
-        FilledButton(onPressed: () => Navigator.pop(context, 'squash'), child: const Text('Auto: squash')),
-      ],
-    ));
+    final autoMergeMethod = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Merge after checks pass?'),
+        content: const Text(
+          'Enable GitHub auto-merge now, or create the pull request without it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, ''),
+            child: const Text('Create PR only'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'merge'),
+            child: const Text('Auto: merge commit'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'rebase'),
+            child: const Text('Auto: rebase'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'squash'),
+            child: const Text('Auto: squash'),
+          ),
+        ],
+      ),
+    );
     if (autoMergeMethod == null) return;
-    await _runGitAction('/git/pull-request', {'title': values[0], 'base': values[1], 'description': values[2], 'autoMergeMethod': autoMergeMethod}, autoMergeMethod.isEmpty ? 'Pull request created' : 'Pull request created with auto-merge');
+    await _runGitAction(
+      '/git/pull-request',
+      {
+        'title': values[0],
+        'base': values[1],
+        'description': values[2],
+        'autoMergeMethod': autoMergeMethod,
+      },
+      autoMergeMethod.isEmpty
+          ? 'Pull request created'
+          : 'Pull request created with auto-merge',
+    );
   }
 
   Future<void> _enableAutoMerge() async {
-    final method = await showDialog<String>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Enable auto-merge'),
-      content: const Text('GitHub will merge this branch only after all required checks and branch protections pass. Choose the merge method.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        TextButton(onPressed: () => Navigator.pop(context, 'merge'), child: const Text('Create merge commit')),
-        TextButton(onPressed: () => Navigator.pop(context, 'rebase'), child: const Text('Rebase')),
-        FilledButton(onPressed: () => Navigator.pop(context, 'squash'), child: const Text('Squash')),
-      ],
-    ));
+    final method = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Enable auto-merge'),
+        content: const Text(
+          'GitHub will merge this branch only after all required checks and branch protections pass. Choose the merge method.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'merge'),
+            child: const Text('Create merge commit'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'rebase'),
+            child: const Text('Rebase'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'squash'),
+            child: const Text('Squash'),
+          ),
+        ],
+      ),
+    );
     if (method == null) return;
-    await _runGitAction('/git/pull-request/auto-merge', {'method': method}, 'Auto-merge enabled');
+    await _runGitAction('/git/pull-request/auto-merge', {
+      'method': method,
+    }, 'Auto-merge enabled');
   }
 
-  Future<void> _runGitAction(String endpoint, Map<String, dynamic>? body, String success) async {
+  Future<void> _runGitAction(
+    String endpoint,
+    Map<String, dynamic>? body,
+    String success,
+  ) async {
     if (_project == null || _gitBusy) return;
     setState(() => _gitBusy = true);
     try {
@@ -578,8 +1009,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       if (response['url'] is String && mounted) {
         _showError('$success: ${response['url']}');
       }
-    } catch (error) { _showError(error); }
-    finally { if (mounted) setState(() => _gitBusy = false); }
+    } catch (error) {
+      _showError(error);
+    } finally {
+      if (mounted) setState(() => _gitBusy = false);
+    }
   }
 
   Future<void> _createProject() async {
@@ -649,27 +1083,79 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     final workspace = TextEditingController(text: '${project.name}-worktree');
     final branch = TextEditingController();
     final startPoint = TextEditingController(text: project.branch);
-    final values = await showDialog<List<String>>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Create isolated worktree'),
-      content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text('A worktree has its own checkout and new branch, so Codex can work without changing this workspace.'),
-        const SizedBox(height: 16),
-        TextField(controller: workspace, autofocus: true, decoration: const InputDecoration(labelText: 'Workspace name', hintText: 'feature-worktree')),
-        const SizedBox(height: 12),
-        TextField(controller: branch, decoration: const InputDecoration(labelText: 'New branch name', hintText: 'codex/new-feature')),
-        const SizedBox(height: 12),
-        TextField(controller: startPoint, decoration: const InputDecoration(labelText: 'Starting ref', hintText: 'main or a commit SHA')),
-      ])),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, [workspace.text.trim(), branch.text.trim(), startPoint.text.trim()]), child: const Text('Create worktree'))],
-    ));
-    workspace.dispose(); branch.dispose(); startPoint.dispose();
+    final values = await showDialog<List<String>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create isolated worktree'),
+        content: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'A worktree has its own checkout and new branch, so Codex can work without changing this workspace.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: workspace,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Workspace name',
+                  hintText: 'feature-worktree',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: branch,
+                decoration: const InputDecoration(
+                  labelText: 'New branch name',
+                  hintText: 'codex/new-feature',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: startPoint,
+                decoration: const InputDecoration(
+                  labelText: 'Starting ref',
+                  hintText: 'main or a commit SHA',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, [
+              workspace.text.trim(),
+              branch.text.trim(),
+              startPoint.text.trim(),
+            ]),
+            child: const Text('Create worktree'),
+          ),
+        ],
+      ),
+    );
+    workspace.dispose();
+    branch.dispose();
+    startPoint.dispose();
     if (values == null || values.any((value) => value.isEmpty)) return;
     setState(() => _gitBusy = true);
     try {
-      final response = await _request('POST', _projectUrl('/worktrees'), {'workspaceName': values[0], 'branch': values[1], 'startPoint': values[2]});
+      final response = await _request('POST', _projectUrl('/worktrees'), {
+        'workspaceName': values[0],
+        'branch': values[1],
+        'startPoint': values[2],
+      });
       await _refreshProjects(select: response['name'] as String);
-    } catch (error) { _showError(error); }
-    finally { if (mounted) setState(() => _gitBusy = false); }
+    } catch (error) {
+      _showError(error);
+    } finally {
+      if (mounted) setState(() => _gitBusy = false);
+    }
   }
 
   Future<void> _renameProject() async {
@@ -1124,6 +1610,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void dispose() {
     _loginEvents?.close();
     _agentEvents?.close();
+    _freeqPoller?.cancel();
     _code.removeListener(_onEdit);
     _code.dispose();
     _agentPrompt.dispose();
@@ -1178,7 +1665,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       children: [
         const Icon(Icons.auto_awesome, size: 22),
         const SizedBox(width: 10),
-        Flexible(child: Text(_project == null ? 'Codex Workspace' : 'Codex Workspace — ${_project!.repoUrl.isEmpty ? _project!.name : _project!.repoUrl}', overflow: TextOverflow.ellipsis)),
+        Flexible(
+          child: Text(
+            _project == null
+                ? 'Codex Workspace'
+                : 'Codex Workspace — ${_project!.repoUrl.isEmpty ? _project!.name : _project!.repoUrl}',
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         const SizedBox(width: 24),
         if (_projects.isNotEmpty)
           DropdownButtonHideUnderline(
@@ -1530,23 +2024,38 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     children: [
       _panelHeader('AGENT', [
         IconButton(
+          tooltip: 'Hand off to a FreeQ bot',
+          visualDensity: VisualDensity.compact,
+          onPressed: _agentBusy ? null : _openFreeqHandoff,
+          icon: const Icon(Icons.hub_outlined, size: 18),
+        ),
+        IconButton(
           tooltip: 'Create isolated Git worktree',
           visualDensity: VisualDensity.compact,
-          onPressed: _project?.isRepo == true && !_gitBusy ? _createWorktree : null,
+          onPressed: _project?.isRepo == true && !_gitBusy
+              ? _createWorktree
+              : null,
           icon: const Icon(Icons.account_tree_outlined, size: 18),
         ),
         IconButton(
           tooltip: 'Refresh source control',
           visualDensity: VisualDensity.compact,
-          onPressed: _project?.isRepo == true && !_gitBusy ? _refreshGitStatus : null,
+          onPressed: _project?.isRepo == true && !_gitBusy
+              ? _refreshGitStatus
+              : null,
           icon: const Icon(Icons.sync_outlined, size: 18),
         ),
         IconButton(
           tooltip: 'Show diff for current work thread',
           visualDensity: VisualDensity.compact,
-          onPressed: _project?.isRepo == true && !_diffBusy ? _showCurrentThreadDiff : null,
+          onPressed: _project?.isRepo == true && !_diffBusy
+              ? _showCurrentThreadDiff
+              : null,
           icon: _diffBusy
-              ? const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
               : const Icon(Icons.difference_outlined, size: 18),
         ),
         IconButton(
@@ -1566,122 +2075,152 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         child: Column(
           children: [
             if (_gitStatus?.isRepo == true) _buildSourceControl(),
-            Expanded(child: _messages.isEmpty
-            ? Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.auto_awesome_outlined, size: 42),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Ask Codex to work in ${_project?.name}',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'It can inspect the repository, edit files, and run checks inside this project.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
+            if (_freeqHandoffs.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
                 ),
-              )
-            : ListView.builder(
-                controller: _messagesScroll,
-                padding: const EdgeInsets.all(12),
-                itemCount: _messages.length + (_agentBusy ? 1 : 0),
-                itemBuilder: (context, index) {
-                  if (index == _messages.length) {
-                    return Padding(
-                      padding: EdgeInsets.all(12),
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+                ),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: _freeqHandoffs.map((handoff) {
+                    final status = handoff['status']?.toString() ?? 'offered';
+                    return Chip(
+                      avatar: const Icon(Icons.hub_outlined, size: 15),
+                      label: Text(
+                        '${handoff['botName'] ?? 'FreeQ bot'}: $status',
+                      ),
+                      visualDensity: VisualDensity.compact,
+                    );
+                  }).toList(),
+                ),
+              ),
+            Expanded(
+              child: _messages.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(24),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Row(
-                            children: [
-                              SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                              SizedBox(width: 10),
-                              Text(
-                                _agentStopping
-                                    ? 'Stopping Codex…'
-                                    : 'Codex is working…',
-                              ),
-                            ],
+                          const Icon(Icons.auto_awesome_outlined, size: 42),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Ask Codex to work in ${_project?.name}',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.titleMedium,
                           ),
-                          if (_agentActivity.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF161B22),
-                                border: Border.all(
-                                  color: const Color(0xFF30363D),
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: _agentActivity
-                                    .map(
-                                      (activity) => Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 4,
-                                        ),
-                                        child: Text('• $activity'),
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
-                            ),
-                          ],
-                          if (_streamedResponse.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF161B22),
-                                border: Border.all(
-                                  color: const Color(0xFF30363D),
-                                ),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: SelectableText(_streamedResponse),
-                            ),
-                          ],
+                          const SizedBox(height: 8),
+                          const Text(
+                            'It can inspect the repository, edit files, and run checks inside this project.',
+                            textAlign: TextAlign.center,
+                          ),
                         ],
                       ),
-                    );
-                  }
-                  final message = _messages[index];
-                  final user = message.role == 'user';
-                  return Align(
-                    alignment: user
-                        ? Alignment.centerRight
-                        : Alignment.centerLeft,
-                    child: Container(
-                      constraints: const BoxConstraints(maxWidth: 340),
-                      margin: const EdgeInsets.only(bottom: 10),
+                    )
+                  : ListView.builder(
+                      controller: _messagesScroll,
                       padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: user
-                            ? const Color(0xFF263659)
-                            : const Color(0xFF161B22),
-                        border: Border.all(color: const Color(0xFF30363D)),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: SelectableText(message.text),
+                      itemCount: _messages.length + (_agentBusy ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (index == _messages.length) {
+                          return Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    SizedBox.square(
+                                      dimension: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    ),
+                                    SizedBox(width: 10),
+                                    Text(
+                                      _agentStopping
+                                          ? 'Stopping Codex…'
+                                          : 'Codex is working…',
+                                    ),
+                                  ],
+                                ),
+                                if (_agentActivity.isNotEmpty) ...[
+                                  const SizedBox(height: 10),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF161B22),
+                                      border: Border.all(
+                                        color: const Color(0xFF30363D),
+                                      ),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: _agentActivity
+                                          .map(
+                                            (activity) => Padding(
+                                              padding: const EdgeInsets.only(
+                                                bottom: 4,
+                                              ),
+                                              child: Text('• $activity'),
+                                            ),
+                                          )
+                                          .toList(),
+                                    ),
+                                  ),
+                                ],
+                                if (_streamedResponse.isNotEmpty) ...[
+                                  const SizedBox(height: 10),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF161B22),
+                                      border: Border.all(
+                                        color: const Color(0xFF30363D),
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: SelectableText(_streamedResponse),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          );
+                        }
+                        final message = _messages[index];
+                        final user = message.role == 'user';
+                        return Align(
+                          alignment: user
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Container(
+                            constraints: const BoxConstraints(maxWidth: 340),
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: user
+                                  ? const Color(0xFF263659)
+                                  : const Color(0xFF161B22),
+                              border: Border.all(
+                                color: const Color(0xFF30363D),
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: SelectableText(message.text),
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
-              )),
+            ),
           ],
         ),
       ),
@@ -1762,28 +2301,109 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         : 'Up to date';
     return Container(
       constraints: const BoxConstraints(maxHeight: 230),
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFF30363D)))),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
-          child: Row(children: [
-            const Icon(Icons.account_tree_outlined, size: 17), const SizedBox(width: 8),
-            Expanded(child: Text(status.branch.isEmpty ? 'Detached HEAD' : status.branch, style: Theme.of(context).textTheme.labelLarge)),
-            if (status.behind > 0) Text('↓${status.behind}', style: const TextStyle(color: Color(0xFFE3B341))),
-            if (status.ahead > 0) Text(' ↑${status.ahead}', style: const TextStyle(color: Color(0xFF7EE787))),
-          ]),
-        ),
-        if (status.files.isNotEmpty) Flexible(child: ListView.builder(shrinkWrap: true, itemCount: status.files.length, itemBuilder: (context, index) {
-          final change = status.files[index];
-          return ListTile(dense: true, visualDensity: VisualDensity.compact, leading: Text(change.label.substring(0, 1), style: const TextStyle(color: Color(0xFFE3B341))), title: Text(change.path, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)), trailing: Text(change.label, style: Theme.of(context).textTheme.labelSmall));
-        })),
-        Padding(padding: const EdgeInsets.fromLTRB(12, 6, 12, 10), child: Row(children: [
-          Expanded(child: FilledButton.icon(onPressed: _gitBusy ? null : primary, icon: Icon(status.changedCount > 0 ? Icons.commit : Icons.cloud_upload_outlined, size: 17), label: Text(primaryLabel))),
-          const SizedBox(width: 8),
-          IconButton(tooltip: 'Create pull request', onPressed: _gitBusy || !status.hasRemote || !status.prAvailable || status.changedCount > 0 || status.ahead == 0 ? null : _createPullRequest, icon: const Icon(Icons.call_merge_outlined, size: 19)),
-          IconButton(tooltip: 'Enable auto-merge for this branch\'s pull request', onPressed: _gitBusy || !status.hasRemote || !status.prAvailable || status.changedCount > 0 ? null : _enableAutoMerge, icon: const Icon(Icons.merge_type_outlined, size: 19)),
-        ])),
-      ]),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
+            child: Row(
+              children: [
+                const Icon(Icons.account_tree_outlined, size: 17),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    status.branch.isEmpty ? 'Detached HEAD' : status.branch,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ),
+                if (status.behind > 0)
+                  Text(
+                    '↓${status.behind}',
+                    style: const TextStyle(color: Color(0xFFE3B341)),
+                  ),
+                if (status.ahead > 0)
+                  Text(
+                    ' ↑${status.ahead}',
+                    style: const TextStyle(color: Color(0xFF7EE787)),
+                  ),
+              ],
+            ),
+          ),
+          if (status.files.isNotEmpty)
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: status.files.length,
+                itemBuilder: (context, index) {
+                  final change = status.files[index];
+                  return ListTile(
+                    dense: true,
+                    visualDensity: VisualDensity.compact,
+                    leading: Text(
+                      change.label.substring(0, 1),
+                      style: const TextStyle(color: Color(0xFFE3B341)),
+                    ),
+                    title: Text(
+                      change.path,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    trailing: Text(
+                      change.label,
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  );
+                },
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _gitBusy ? null : primary,
+                    icon: Icon(
+                      status.changedCount > 0
+                          ? Icons.commit
+                          : Icons.cloud_upload_outlined,
+                      size: 17,
+                    ),
+                    label: Text(primaryLabel),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'Create pull request',
+                  onPressed:
+                      _gitBusy ||
+                          !status.hasRemote ||
+                          !status.prAvailable ||
+                          status.changedCount > 0 ||
+                          status.ahead == 0
+                      ? null
+                      : _createPullRequest,
+                  icon: const Icon(Icons.call_merge_outlined, size: 19),
+                ),
+                IconButton(
+                  tooltip: 'Enable auto-merge for this branch\'s pull request',
+                  onPressed:
+                      _gitBusy ||
+                          !status.hasRemote ||
+                          !status.prAvailable ||
+                          status.changedCount > 0
+                      ? null
+                      : _enableAutoMerge,
+                  icon: const Icon(Icons.merge_type_outlined, size: 19),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
