@@ -5,6 +5,7 @@ Run ``python3 deploy.py`` to deploy a clean archive of the newest
 uncommitted files and an outdated checkout are never released.
 """
 
+import hashlib
 import io
 import os
 import subprocess
@@ -110,9 +111,9 @@ app = modal.App("cloud-code-editor")
 projects = modal.Volume.from_name(
     "cloud-code-editor-projects", create_if_missing=True, version=2
 )
-pocket_id_secret = modal.Secret.from_name(
-    "code-editor-pocket-id",
-    required_keys=["OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "SESSION_SECRET"],
+atproto_oauth_secret = modal.Secret.from_name(
+    "code-editor-atproto-oauth",
+    required_keys=["ATPROTO_OAUTH_PRIVATE_JWK", "SESSION_SECRET"],
 )
 
 image = (
@@ -121,7 +122,6 @@ image = (
     )
     .apt_install("bash", "curl", "git", "gh")
     .pip_install(
-        "authlib==1.6.5",
         "fastapi[standard]==0.121.3",
         "itsdangerous==2.2.0",
         "openai-codex==0.156.1",
@@ -130,7 +130,6 @@ image = (
         {
             "APP_URL": "https://codegod100--cloud-code-editor-serve.modal.run",
             "CODEX_HOME": "/projects/.codex",
-            "POCKET_ID_ISSUER": "https://codegod100--pocket-id-serve.modal.run",
         }
     )
     .add_local_dir(".", remote_path="/app", copy=True)
@@ -147,7 +146,7 @@ image = (
 
 @app.function(
     image=image,
-    secrets=[pocket_id_secret],
+    secrets=[atproto_oauth_secret],
     volumes={"/projects": projects},
     timeout=60 * 60,
     max_containers=1,
@@ -166,8 +165,7 @@ def serve():
     from pathlib import Path, PurePosixPath
 
     from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-    from authlib.integrations.starlette_client import OAuth
-    from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
     from urllib.parse import quote, urlparse
     from urllib.request import urlopen
     from fastapi.staticfiles import StaticFiles
@@ -188,33 +186,23 @@ def serve():
     terminal_sessions = {}
 
     app_url = os.environ["APP_URL"].rstrip("/")
-    pocket_id_issuer = os.environ["POCKET_ID_ISSUER"].rstrip("/")
-    oauth = OAuth()
-    oauth.register(
-        name="pocket_id",
-        server_metadata_url=f"{pocket_id_issuer}/.well-known/openid-configuration",
-        client_id=os.environ["OIDC_CLIENT_ID"],
-        client_secret=os.environ["OIDC_CLIENT_SECRET"],
-        client_kwargs={
-            "scope": "openid profile email groups",
-            "code_challenge_method": "S256",
-        },
-    )
-
-    public_paths = {"/auth/login", "/auth/callback"}
+    public_paths = {
+        "/auth/login", "/auth/authorize", "/auth/callback",
+        "/oauth-client-metadata.json", "/.well-known/jwks.json",
+    }
 
     @api.middleware("http")
-    async def require_pocket_id(request: Request, call_next):
+    async def require_atproto_identity(request: Request, call_next):
         if request.url.path in public_paths or request.session.get("user"):
             return await call_next(request)
         if request.url.path.startswith("/api/"):
             return JSONResponse(
-                {"detail": "Pocket ID authentication required"}, status_code=401
+                {"detail": "AT Protocol authentication required"}, status_code=401
             )
         return RedirectResponse("/auth/login", status_code=307)
 
     # Add this after the authorization middleware so the session is populated
-    # before require_pocket_id reads it.
+    # before require_atproto_identity reads it.
     api.add_middleware(
         SessionMiddleware,
         secret_key=os.environ["SESSION_SECRET"],
@@ -223,34 +211,75 @@ def serve():
         max_age=12 * 60 * 60,
     )
 
-    @api.get("/auth/login")
-    async def login(request: Request):
-        return await oauth.pocket_id.authorize_redirect(
-            request,
-            f"{app_url}/auth/callback",
+    async def atproto_oauth(command: str, payload: dict) -> dict:
+        """Run the official OAuth client with durable state on the project Volume."""
+        process = await asyncio.create_subprocess_exec(
+            "node", "/app/freeq-handoff/atproto-oauth.mjs", command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ | {"ATPROTO_OAUTH_ROOT": "/projects/.atproto-oauth"},
         )
+        process.stdin.write(json.dumps(payload).encode())
+        await process.stdin.drain()
+        process.stdin.close()
+        stdout, stderr = await process.communicate()
+        if process.returncode:
+            detail = stderr.decode().strip() or "AT Protocol OAuth helper failed"
+            raise HTTPException(502, detail)
+        try:
+            return json.loads(stdout)
+        except ValueError as exc:
+            raise HTTPException(502, "AT Protocol OAuth helper returned invalid JSON") from exc
+
+    @api.get("/auth/login")
+    async def login():
+        return HTMLResponse("""<!doctype html><title>Sign in with AT Protocol</title>
+        <form action='/auth/authorize' method='get'>
+          <label>AT Protocol handle <input name='identity' required autofocus placeholder='you.bsky.social'></label>
+          <button type='submit'>Continue</button>
+        </form>""")
+
+    @api.get("/auth/authorize")
+    async def authorize(identity: str, request: Request):
+        identity = identity.strip()
+        if not identity or identity.startswith("did:"):
+            raise HTTPException(400, "an AT Protocol handle is required")
+        request.session["atproto_handle"] = identity.lower()
+        result = await atproto_oauth("authorize", {"identity": identity})
+        return RedirectResponse(result["url"], status_code=303)
 
     @api.get("/auth/callback")
     async def auth_callback(request: Request):
         try:
-            token = await oauth.pocket_id.authorize_access_token(request)
+            result = await atproto_oauth("callback", {"params": list(request.query_params.multi_items())})
         except Exception as exc:
-            raise HTTPException(401, f"Pocket ID login failed: {exc}") from exc
-        claims = token.get("userinfo")
-        if not claims or not claims.get("sub"):
-            raise HTTPException(401, "Pocket ID did not return an authenticated user")
+            raise HTTPException(401, f"AT Protocol login failed: {exc}") from exc
+        did = result.get("did")
+        if not isinstance(did, str) or not did.startswith("did:"):
+            raise HTTPException(401, "AT Protocol login did not return a DID")
+        handle = request.session.pop("atproto_handle", None)
+        if not isinstance(handle, str) or not handle:
+            raise HTTPException(401, "AT Protocol login is missing its original handle")
         request.session["user"] = {
-            "sub": claims["sub"],
-            "name": claims.get("name") or claims.get("preferred_username") or "User",
-            "email": claims.get("email"),
-            "groups": claims.get("groups", []),
+            "did": did,
+            "handle": handle,
+            "name": handle,
         }
         return RedirectResponse("/", status_code=303)
 
     @api.get("/auth/logout")
     async def logout(request: Request):
         request.session.clear()
-        return RedirectResponse(pocket_id_issuer, status_code=303)
+        return RedirectResponse("/auth/login", status_code=303)
+
+    @api.get("/oauth-client-metadata.json")
+    async def oauth_client_metadata():
+        return await atproto_oauth("metadata", {})
+
+    @api.get("/.well-known/jwks.json")
+    async def oauth_jwks():
+        return await atproto_oauth("jwks", {})
 
     @api.get("/api/me")
     async def current_user(request: Request):
@@ -768,15 +797,24 @@ def serve():
             raise HTTPException(400, "FreeQ channel must start with #")
         if not capability or not title:
             raise HTTPException(400, "capability and task are required")
-        if not os.environ.get("FREEQ_OWNER_DID") or not os.environ.get("FREEQ_BOT_NICK"):
-            raise HTTPException(503, "FreeQ handoff is not configured: set FREEQ_OWNER_DID and FREEQ_BOT_NICK")
+        user = request.session.get("user") or {}
+        owner_did = user.get("did")
+        handle = user.get("handle")
+        if not isinstance(owner_did, str) or not owner_did.startswith("did:") or not isinstance(handle, str):
+            raise HTTPException(401, "AT Protocol authentication is required for FreeQ handoff")
+        bot_suffix = hashlib.sha256(owner_did.encode()).hexdigest()[:10]
+        bot_nick = f"{re.sub(r'[^A-Za-z0-9_-]', '-', handle)}-editor"
         origin = freeq_server_origin(server)
         payload = json.dumps({"serverUrl": server, "channel": channel, "capability": capability, "title": title[:500], "context": context[:4000]})
         process = await asyncio.create_subprocess_exec(
             "node", "/app/freeq-handoff/dispatch.mjs",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=os.environ | {"FREEQ_BOT_ROOT": "/projects/.freeq-bots"},
+            env=os.environ | {
+                "FREEQ_OWNER_DID": owner_did,
+                "FREEQ_BOT_NICK": bot_nick,
+                "FREEQ_BOT_ROOT": f"/projects/.freeq-bots/{bot_suffix}",
+            },
         )
         process.stdin.write(payload.encode())
         await process.stdin.drain()

@@ -12,7 +12,7 @@ The Flutter UI and FastAPI backend deploy together as one Modal application.
   `workspace-write` sandbox access.
 - Provides an authenticated, project-rooted browser terminal rendered by
   `libghostty-vt` WebAssembly.
-- Requires Pocket ID OIDC authentication before serving the UI or any API.
+- Requires AT Protocol OAuth authentication before serving the UI or any API.
 - Authenticates Codex with ChatGPT device login; no API key is embedded in the
   app or frontend.
 
@@ -53,20 +53,19 @@ state.
 
 ## Deploy
 
-Create a confidential Pocket ID OIDC client with PKCE enabled and this exact
-callback URL:
+Generate an ES256 private JWK for the confidential AT Protocol OAuth client,
+then store it with an independent cookie-signing secret:
 
 ```text
 https://codegod100--cloud-code-editor-serve.modal.run/auth/callback
 ```
 
-Store its credentials in a Modal Secret named `code-editor-pocket-id` together
-with an independent random cookie-signing secret:
+Store it in a Modal Secret named `code-editor-atproto-oauth` together with an
+independent random cookie-signing secret:
 
 ```sh
-modal secret create code-editor-pocket-id \
-  OIDC_CLIENT_ID='<pocket-id-client-id>' \
-  OIDC_CLIENT_SECRET='<pocket-id-client-secret>' \
+modal secret create code-editor-atproto-oauth \
+  ATPROTO_OAUTH_PRIVATE_JWK='<ES256-private-JWK>' \
   SESSION_SECRET='<random-value-at-least-32-bytes>'
 ```
 
@@ -81,23 +80,18 @@ channel. Any capable bot there may claim it. Its `accept`, `complete`, `fail`,
 or `decline` act is read from the channel audit trail; a completion resumes the
 project's existing Codex thread, which inspects and incorporates the result.
 
-Set the AT Protocol DID that owns the editor's FreeQ sender before deploying:
-
-```sh
-modal secret create code-editor-pocket-id \
-  OIDC_CLIENT_ID='<pocket-id-client-id>' \
-  OIDC_CLIENT_SECRET='<pocket-id-client-secret>' \
-  SESSION_SECRET='<random-value-at-least-32-bytes>' \
-  FREEQ_OWNER_DID='did:plc:<your-did>' \
-  FREEQ_BOT_NICK='your-editor-handoff-bot'
-```
+The editor uses the DID returned by the current AT Protocol OAuth session as
+the FreeQ sender owner. Its nick is the signed-in handle plus `-editor`, with
+characters not accepted by IRC normalized to `-` (for example,
+`nandi.uk` becomes `nandi-uk-editor`). It stores the bot key and delegation
+certificate under `/projects/.freeq-bots/<short-id>`, so no shared FreeQ DID
+or nick secret is needed.
 
 The sender is an ephemeral canonical `@freeq/bot-kit` session: it joins the
 chosen channel, emits `actTags('handoff', 'offer', ...)` with `caps`, `title`,
 and `ctx`, then remains connected until the offer reaches `complete`, `fail`,
 `decline`, or its deadline. It then exits cleanly. A bot must be present in
-that channel and claim the selected capability. The editor never fakes an
-unsigned handoff if the FreeQ owner DID is absent.
+that channel and claim the selected capability.
 
 ```sh
 python3 deploy.py
@@ -107,7 +101,7 @@ The first image build installs Flutter, FastAPI, Git, and the pinned Codex
 Python SDK, then compiles the Flutter release bundle. Later builds reuse Modal's
 image layers.
 
-After signing in through Pocket ID:
+After signing in with an AT Protocol handle or DID:
 
 1. Select **Project** to create a folder or clone an HTTP(S)/SSH repository.
 2. Select **Connect Codex**, open the verification page, and enter the shown
