@@ -366,7 +366,17 @@ def serve():
                 continue
             is_repo = (path / ".git").exists()
             branch = run_git(path, "branch", "--show-current") if is_repo else ""
-            values.append({"name": path.name, "isRepo": is_repo, "branch": branch})
+            remote = git_result(path, "remote", "get-url", "origin") if is_repo else None
+            values.append(
+                {
+                    "name": path.name,
+                    "isRepo": is_repo,
+                    "branch": branch,
+                    "repoUrl": remote.stdout.strip()
+                    if remote is not None and remote.returncode == 0
+                    else "",
+                }
+            )
         return {"projects": values}
 
     @api.post("/api/projects")

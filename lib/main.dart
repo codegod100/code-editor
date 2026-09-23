@@ -38,17 +38,20 @@ class ProjectSummary {
     required this.name,
     required this.isRepo,
     this.branch = '',
+    this.repoUrl = '',
   });
 
   factory ProjectSummary.fromJson(Map<String, dynamic> json) => ProjectSummary(
     name: json['name'] as String,
     isRepo: json['isRepo'] as bool? ?? false,
     branch: json['branch'] as String? ?? '',
+    repoUrl: json['repoUrl'] as String? ?? '',
   );
 
   final String name;
   final bool isRepo;
   final String branch;
+  final String repoUrl;
 }
 
 class AgentMessage {
@@ -1175,7 +1178,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       children: [
         const Icon(Icons.auto_awesome, size: 22),
         const SizedBox(width: 10),
-        Flexible(child: Text(_project == null ? 'Codex Workspace' : 'Codex Workspace — ${_project!.name}', overflow: TextOverflow.ellipsis)),
+        Flexible(child: Text(_project == null ? 'Codex Workspace' : 'Codex Workspace — ${_project!.repoUrl.isEmpty ? _project!.name : _project!.repoUrl}', overflow: TextOverflow.ellipsis)),
         const SizedBox(width: 24),
         if (_projects.isNotEmpty)
           DropdownButtonHideUnderline(
