@@ -218,6 +218,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final List<TerminalSession> _terminals = [];
   int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
   int? _activeTerminalId;
+  double _terminalHeight = 300;
 
   bool get _dirty => _path != null && _code.text != _savedText;
 
@@ -940,10 +941,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void _openTerminal() {
     final project = _project;
     if (project == null) return;
-    if (_terminals.isEmpty) {
-      _terminals.add(TerminalSession(_nextTerminalId++));
-      _activeTerminalId = _terminals.single.id;
-    }
+    setState(() {
+      if (_terminals.isEmpty) _terminals.add(TerminalSession(_nextTerminalId++));
+      _activeTerminalId = _terminals.last.id;
+    });
+    if (_terminals.isNotEmpty) return;
     showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -1059,6 +1061,27 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ),
       ),
     );
+  }
+
+  void _newTerminal() => setState(() {
+    final terminal = TerminalSession(_nextTerminalId++);
+    _terminals.add(terminal);
+    _activeTerminalId = terminal.id;
+  });
+
+  void _closeTerminalTab(TerminalSession terminal) {
+    final project = _project;
+    if (project == null) return;
+    setState(() {
+      final closedIndex = _terminals.indexOf(terminal);
+      _terminals.remove(terminal);
+      if (_activeTerminalId == terminal.id) {
+        _activeTerminalId = _terminals.isEmpty
+            ? null
+            : _terminals[closedIndex.clamp(0, _terminals.length - 1).toInt()].id;
+      }
+    });
+    unawaited(_closeTerminal(project.name, terminal.id));
   }
 
   Future<void> _closeTerminal(String projectName, int sessionId) async {
@@ -1364,6 +1387,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildWorkspace() => LayoutBuilder(
     builder: (context, constraints) {
+      final maxTerminalHeight = (constraints.maxHeight - 180).clamp(160, 640).toDouble();
+      final terminalHeight = _terminalHeight.clamp(160, maxTerminalHeight).toDouble();
       if (constraints.maxWidth < 900) {
         return DefaultTabController(
           length: 3,
@@ -1385,17 +1410,91 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           ),
         );
       }
-      return Row(
+      return Column(
         children: [
-          SizedBox(width: 250, child: _buildFiles()),
-          const VerticalDivider(width: 1),
-          Expanded(child: _buildEditor()),
-          const VerticalDivider(width: 1),
-          SizedBox(width: 390, child: _buildAgent()),
+          Expanded(child: Row(
+            children: [
+              SizedBox(width: 250, child: _buildFiles()),
+              const VerticalDivider(width: 1),
+              Expanded(child: _buildEditor()),
+              const VerticalDivider(width: 1),
+              SizedBox(width: 390, child: _buildAgent()),
+            ],
+          )),
+          if (_terminals.isNotEmpty) ...[
+            MouseRegion(
+              cursor: SystemMouseCursors.resizeUpDown,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onVerticalDragUpdate: (details) => setState(() {
+                  _terminalHeight = (_terminalHeight - details.delta.dy)
+                      .clamp(160, maxTerminalHeight)
+                      .toDouble();
+                }),
+                child: const SizedBox(
+                  height: 6,
+                  child: Divider(height: 1),
+                ),
+              ),
+            ),
+            SizedBox(height: terminalHeight, child: _buildTerminalPanel()),
+          ],
         ],
       );
     },
   );
+
+  Widget _buildTerminalPanel() {
+    final project = _project;
+    final terminal = _terminals.isEmpty
+        ? null
+        : _terminals.firstWhere(
+            (terminal) => terminal.id == _activeTerminalId,
+            orElse: () => _terminals.last,
+          );
+    if (project == null || terminal == null) return const SizedBox.shrink();
+    return Column(children: [
+      Container(
+        height: 44,
+        padding: const EdgeInsets.only(left: 12, right: 4),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+        ),
+        child: Row(children: [
+          Text('TERMINAL', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(width: 12),
+          Expanded(child: ListView(
+            scrollDirection: Axis.horizontal,
+            children: _terminals.map((tab) => Row(mainAxisSize: MainAxisSize.min, children: [
+              TextButton(
+                onPressed: () => setState(() => _activeTerminalId = tab.id),
+                style: TextButton.styleFrom(
+                  foregroundColor: _activeTerminalId == tab.id
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
+                ),
+                child: Text(tab.label),
+              ),
+              IconButton(
+                tooltip: 'Close ${tab.label}',
+                visualDensity: VisualDensity.compact,
+                iconSize: 16,
+                onPressed: () => _closeTerminalTab(tab),
+                icon: const Icon(Icons.close),
+              ),
+            ])).toList(),
+          )),
+          IconButton(
+            tooltip: 'New terminal',
+            visualDensity: VisualDensity.compact,
+            onPressed: _newTerminal,
+            icon: const Icon(Icons.add),
+          ),
+        ]),
+      ),
+      Expanded(child: GhosttyTerminal(projectName: project.name, sessionId: terminal.id)),
+    ]);
+  }
 
   Widget _panelHeader(String title, List<Widget> actions) => Container(
     height: 44,
