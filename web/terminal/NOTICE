@@ -1,0 +1,6 @@
+This directory vendors ghostty-web 0.4.0, an MIT-licensed browser adapter for
+libghostty-vt. It contains Ghostty's WebAssembly VT parser and terminal state
+implementation.
+
+Source: https://github.com/coder/ghostty-web
+Package: https://www.npmjs.com/package/ghostty-web/v/0.4.0

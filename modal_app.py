@@ -20,7 +20,7 @@ image = (
     modal.Image.from_registry(
         "ghcr.io/cirruslabs/flutter:stable", add_python="3.12"
     )
-    .apt_install("git")
+    .apt_install("bash", "git")
     .pip_install(
         "authlib==1.6.5",
         "fastapi[standard]==0.121.3",
@@ -60,7 +60,7 @@ def serve():
     import tempfile
     from pathlib import Path, PurePosixPath
 
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
     from authlib.integrations.starlette_client import OAuth
     from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -310,6 +310,86 @@ def serve():
             write_session(project, {"threadId": None, "messages": []})
             await commit()
         return {"reset": True}
+
+    @api.websocket("/api/projects/{name}/terminal")
+    async def project_terminal(name: str, websocket: WebSocket):
+        """Bridge one authenticated browser terminal to an ephemeral project shell."""
+        if not websocket.session.get("user"):
+            await websocket.close(code=4401)
+            return
+        project = project_dir(name)
+        await websocket.accept()
+
+        import pty
+        import select
+        import signal
+
+        master_fd, slave_fd = pty.openpty()
+        environment = os.environ.copy()
+        environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
+        process = subprocess.Popen(
+            ["bash", "-i"],
+            cwd=str(project),
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            env=environment,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+
+        async def read_terminal() -> None:
+            while True:
+                ready, _, _ = await asyncio.to_thread(
+                    select.select, [master_fd], [], [], 1
+                )
+                if not ready:
+                    if process.poll() is not None:
+                        return
+                    continue
+                try:
+                    output = os.read(master_fd, 16 * 1024)
+                except OSError:
+                    return
+                if not output:
+                    return
+                await websocket.send_bytes(output)
+
+        output_task = asyncio.create_task(read_terminal())
+        try:
+            while True:
+                message = await websocket.receive_json()
+                message_type = message.get("type")
+                if message_type == "input" and isinstance(message.get("data"), str):
+                    os.write(master_fd, message["data"].encode("utf-8"))
+                elif message_type == "resize":
+                    columns = int(message.get("cols", 80))
+                    rows = int(message.get("rows", 24))
+                    if not (1 <= columns <= 500 and 1 <= rows <= 200):
+                        continue
+                    import fcntl
+                    import struct
+                    import termios
+
+                    fcntl.ioctl(
+                        master_fd,
+                        termios.TIOCSWINSZ,
+                        struct.pack("HHHH", rows, columns, 0, 0),
+                    )
+                    os.killpg(process.pid, signal.SIGWINCH)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            output_task.cancel()
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                await asyncio.to_thread(process.wait, 5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            finally:
+                os.close(master_fd)
 
     @api.get("/api/codex/status")
     async def codex_status():
