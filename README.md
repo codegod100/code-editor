@@ -26,6 +26,9 @@ All mutable state is on the Modal v2 Volume
   thread id and visible conversation history.
 - `/projects/.codex` is `CODEX_HOME` and contains the server-side Codex login
   and runtime state.
+- `/projects/.freeq-bots` holds the did:key identity and delegation certificate
+  used by the FreeQ handoff sender. It is mounted on the same durable Volume,
+  so its identity survives restarts.
 
 Every clone, editor save, session reset, login, and completed agent turn calls
 `Volume.commit()` explicitly. The web function is limited to one container so
@@ -69,6 +72,32 @@ modal secret create code-editor-pocket-id \
 
 The deployment intentionally fails if that secret or any required key is
 missing; there is no anonymous mode.
+
+## FreeQ bot handoff
+
+The Agent panel's FreeQ button discovers published bot manifests from the
+canonical server, then sends a signed, open `handoff/offer` into the configured
+channel. Any capable bot there may claim it. Its `accept`, `complete`, `fail`,
+or `decline` act is read from the channel audit trail; a completion resumes the
+project's existing Codex thread, which inspects and incorporates the result.
+
+Set the AT Protocol DID that owns the editor's FreeQ sender before deploying:
+
+```sh
+modal secret create code-editor-pocket-id \
+  OIDC_CLIENT_ID='<pocket-id-client-id>' \
+  OIDC_CLIENT_SECRET='<pocket-id-client-secret>' \
+  SESSION_SECRET='<random-value-at-least-32-bytes>' \
+  FREEQ_OWNER_DID='did:plc:<your-did>' \
+  FREEQ_BOT_NICK='your-editor-handoff-bot'
+```
+
+The sender is an ephemeral canonical `@freeq/bot-kit` session: it joins the
+chosen channel, emits `actTags('handoff', 'offer', ...)` with `caps`, `title`,
+and `ctx`, then remains connected until the offer reaches `complete`, `fail`,
+`decline`, or its deadline. It then exits cleanly. A bot must be present in
+that channel and claim the selected capability. The editor never fakes an
+unsigned handoff if the FreeQ owner DID is absent.
 
 ```sh
 python3 deploy.py

@@ -66,6 +66,32 @@ class AgentMessage {
   final String text;
 }
 
+class FreeqBot {
+  const FreeqBot({
+    required this.did,
+    required this.name,
+    required this.description,
+    required this.capabilities,
+    this.version = '',
+  });
+
+  factory FreeqBot.fromJson(Map<String, dynamic> json) => FreeqBot(
+    did: json['did'] as String? ?? '',
+    name: json['name'] as String? ?? 'Unknown bot',
+    description: json['description'] as String? ?? '',
+    capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
+        .map((value) => value.toString())
+        .toList(),
+    version: json['version'] as String? ?? '',
+  );
+
+  final String did;
+  final String name;
+  final String description;
+  final List<String> capabilities;
+  final String version;
+}
+
 class GitChange {
   const GitChange({
     required this.path,
@@ -213,6 +239,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   List<String> _files = const [];
   final Set<String> _expandedDirectories = {};
   List<AgentMessage> _messages = const [];
+  List<Map<String, dynamic>> _freeqHandoffs = const [];
   ProjectSummary? _project;
   String? _path;
   String _savedText = '';
@@ -233,6 +260,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   String? _loginCode;
   html.EventSource? _loginEvents;
   html.EventSource? _agentEvents;
+  Timer? _freeqPoller;
   final List<TerminalSession> _terminals = [];
   int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
   int? _activeTerminalId;
@@ -344,6 +372,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _files = const [];
       _expandedDirectories.clear();
       _messages = const [];
+      _freeqHandoffs = const [];
       _loading = true;
       _error = null;
     });
@@ -373,8 +402,240 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _messages = (response['messages'] as List<dynamic>? ?? const [])
           .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
           .toList();
+      _freeqHandoffs = (response['handoffs'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList();
     });
+    _ensureFreeqPolling();
     _scrollMessages();
+  }
+
+  void _ensureFreeqPolling() {
+    _freeqPoller?.cancel();
+    if (_project == null ||
+        !_freeqHandoffs.any(
+          (item) =>
+              !{'complete', 'fail', 'decline', 'timeout'}.contains(
+                item['status'],
+              ),
+        ))
+      return;
+    _freeqPoller = Timer.periodic(const Duration(seconds: 5), (_) async {
+      final project = _project;
+      if (project == null) return;
+      final pending = _freeqHandoffs
+          .where(
+            (item) =>
+                !{'complete', 'fail', 'decline', 'timeout'}.contains(
+                  item['status'],
+                ),
+          )
+          .toList();
+      for (final handoff in pending) {
+        final taskId = handoff['taskId']?.toString();
+        if (taskId == null || taskId.isEmpty) continue;
+        try {
+          final update = await _request(
+            'GET',
+            '/api/projects/${Uri.encodeComponent(project.name)}/freeq/handoffs/${Uri.encodeComponent(taskId)}',
+          );
+          if (!mounted) return;
+          setState(() {
+            _freeqHandoffs = _freeqHandoffs
+                .map(
+                  (item) =>
+                      item['taskId'] == taskId ? {...item, ...update} : item,
+                )
+                .toList();
+          });
+          if ({'complete', 'fail', 'decline', 'timeout'}.contains(update['status'])) {
+            await _loadSession();
+          }
+        } catch (_) {
+          // A temporary discovery outage should not discard an in-flight task.
+        }
+      }
+      _ensureFreeqPolling();
+    });
+  }
+
+  Future<void> _openFreeqHandoff() async {
+    if (_project == null || _agentBusy) return;
+    final server = TextEditingController(text: 'wss://irc.freeq.at/irc');
+    final channel = TextEditingController(text: '#tasks');
+    final task = TextEditingController(text: _agentPrompt.text);
+    final context = TextEditingController();
+    List<FreeqBot> bots = const [];
+    List<String> capabilities = const [];
+    String? capability;
+    String? discoveryError;
+    bool discovering = true;
+    bool discoveryStarted = false;
+    Future<void> discover(StateSetter setDialogState) async {
+      setDialogState(() {
+        discovering = true;
+        discoveryError = null;
+      });
+      try {
+        final response = await _request(
+          'GET',
+          '/api/freeq/bots?server=${Uri.encodeQueryComponent(server.text.trim())}',
+        );
+        bots = (response['bots'] as List<dynamic>? ?? const [])
+            .map((item) => FreeqBot.fromJson(item as Map<String, dynamic>))
+            .where((bot) => bot.did.isNotEmpty && bot.capabilities.isNotEmpty)
+            .toList();
+        capabilities = bots
+            .expand((bot) => bot.capabilities)
+            .toSet()
+            .toList()
+          ..sort();
+        capability = capabilities.isEmpty ? null : capabilities.first;
+      } catch (error) {
+        discoveryError = error.toString();
+      } finally {
+        setDialogState(() => discovering = false);
+      }
+    }
+
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          if (!discoveryStarted) {
+            discoveryStarted = true;
+            unawaited(discover(setDialogState));
+          }
+          return AlertDialog(
+            title: const Text('Hand off to a FreeQ bot'),
+            content: SizedBox(
+              width: 520,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: server,
+                      readOnly: true,
+                      decoration: const InputDecoration(
+                        labelText: 'FreeQ server (canonical)',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: channel,
+                      decoration: const InputDecoration(labelText: 'Channel'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: task,
+                      maxLines: 2,
+                      onChanged: (_) => setDialogState(() {}),
+                      decoration: const InputDecoration(labelText: 'Task'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: context,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: 'Context for the bot (optional)',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (discovering) const LinearProgressIndicator(),
+                    if (discoveryError != null)
+                      Text(
+                        discoveryError!,
+                        style: const TextStyle(color: Color(0xFFFF7B72)),
+                      ),
+                    if (!discovering && discoveryError == null) ...[
+                      DropdownButtonFormField<String>(
+                        value: capability,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Capability offered in this channel',
+                        ),
+                        items: capabilities
+                            .map(
+                              (item) => DropdownMenuItem(
+                                value: item,
+                                child: Text(
+                                  item,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (item) =>
+                            setDialogState(() => capability = item),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          '${bots.length} published bot${bots.length == 1 ? '' : 's'} discovered. This is an open offer: any bot in the selected channel that supports the capability may claim it.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: discovering ? null : () => discover(setDialogState),
+                child: const Text('Refresh bots'),
+              ),
+              FilledButton(
+                onPressed: capability == null || task.text.trim().isEmpty
+                    ? null
+                    : () => Navigator.pop(dialogContext, true),
+                child: const Text('Hand off'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (accepted != true || capability == null) {
+      server.dispose();
+      channel.dispose();
+      task.dispose();
+      context.dispose();
+      return;
+    }
+    try {
+      final handoff = await _request('POST', _projectUrl('/freeq/handoffs'), {
+        'server': server.text.trim(),
+        'channel': channel.text.trim(),
+        'capability': capability,
+        'title': task.text.trim(),
+        'context': context.text.trim(),
+      });
+      if (!mounted) return;
+      setState(() {
+        _freeqHandoffs = [..._freeqHandoffs, handoff];
+        _messages = [
+          ..._messages,
+          AgentMessage(
+            role: 'user',
+            text: 'Open FreeQ handoff in ${channel.text.trim()}: ${task.text.trim()}',
+          ),
+        ];
+      });
+      _ensureFreeqPolling();
+      _scrollMessages();
+    } catch (error) {
+      _showError(error);
+    }
+    server.dispose();
+    channel.dispose();
+    task.dispose();
+    context.dispose();
   }
 
   Future<void> _openFile(String path) async {
@@ -1390,6 +1651,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void dispose() {
     _loginEvents?.close();
     _agentEvents?.close();
+    _freeqPoller?.cancel();
     _code.removeListener(_onEdit);
     _code.dispose();
     _agentPrompt.dispose();
@@ -1879,6 +2141,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     children: [
       _panelHeader('AGENT', [
         IconButton(
+          tooltip: 'Hand off to a FreeQ bot',
+          visualDensity: VisualDensity.compact,
+          onPressed: _agentBusy ? null : _openFreeqHandoff,
+          icon: const Icon(Icons.hub_outlined, size: 18),
+        ),
+        IconButton(
           tooltip: 'Create isolated Git worktree',
           visualDensity: VisualDensity.compact,
           onPressed: _project?.isRepo == true && !_gitBusy
@@ -1924,6 +2192,31 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         child: Column(
           children: [
             if (_gitStatus?.isRepo == true) _buildSourceControl(),
+            if (_freeqHandoffs.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+                ),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: _freeqHandoffs.map((handoff) {
+                    final status = handoff['status']?.toString() ?? 'offered';
+                    return Chip(
+                      avatar: const Icon(Icons.hub_outlined, size: 15),
+                      label: Text(
+                        '${handoff['botName'] ?? 'FreeQ bot'}: $status',
+                      ),
+                      visualDensity: VisualDensity.compact,
+                    );
+                  }).toList(),
+                ),
+              ),
             Expanded(
               child: _messages.isEmpty
                   ? Padding(
