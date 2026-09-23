@@ -1270,7 +1270,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 itemCount: _messages.length + (_agentBusy ? 1 : 0),
                 itemBuilder: (context, index) {
                   if (index == _messages.length) {
-                    return const Padding(
+                    return Padding(
                       padding: EdgeInsets.all(12),
                       child: Row(
                         children: [
