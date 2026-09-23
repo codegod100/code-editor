@@ -918,15 +918,37 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ),
         child: Column(
           children: [
-            TextField(
-              controller: _agentPrompt,
-              enabled: !_agentBusy,
-              minLines: 2,
-              maxLines: 6,
-              decoration: const InputDecoration(
-                hintText: 'Ask Codex to change this project…',
+            Shortcuts(
+              shortcuts: const {
+                SingleActivator(
+                  LogicalKeyboardKey.enter,
+                  control: true,
+                ): RunAgentIntent(),
+                SingleActivator(
+                  LogicalKeyboardKey.enter,
+                  meta: true,
+                ): RunAgentIntent(),
+              },
+              child: Actions(
+                actions: {
+                  RunAgentIntent: CallbackAction<RunAgentIntent>(
+                    onInvoke: (_) {
+                      _runAgent();
+                      return null;
+                    },
+                  ),
+                },
+                child: TextField(
+                  controller: _agentPrompt,
+                  enabled: !_agentBusy,
+                  minLines: 2,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    hintText: 'Ask Codex to change this project…',
+                    helperText: 'Ctrl/Cmd+Enter to run',
+                  ),
+                ),
               ),
-              onSubmitted: (_) => _runAgent(),
             ),
             const SizedBox(height: 8),
             Row(
@@ -952,4 +974,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
 class SaveIntent extends Intent {
   const SaveIntent();
+}
+
+class RunAgentIntent extends Intent {
+  const RunAgentIntent();
 }
