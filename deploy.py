@@ -885,4 +885,3 @@ def serve():
 
     api.mount("/", StaticFiles(directory="/app/build/web", html=True), name="web")
     return api
-
