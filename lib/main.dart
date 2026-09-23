@@ -63,6 +63,21 @@ class AgentMessage {
   final String text;
 }
 
+class FileTreeNode {
+  FileTreeNode.directory(this.name, this.path)
+    : isDirectory = true,
+      children = [];
+
+  FileTreeNode.file(this.name, this.path)
+    : isDirectory = false,
+      children = const [];
+
+  final String name;
+  final String path;
+  final bool isDirectory;
+  final List<FileTreeNode> children;
+}
+
 const _terminalViewType = 'libghostty-terminal';
 bool _terminalViewRegistered = false;
 
@@ -135,6 +150,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   List<ProjectSummary> _projects = const [];
   List<String> _files = const [];
+  final Set<String> _expandedDirectories = {};
   List<AgentMessage> _messages = const [];
   ProjectSummary? _project;
   String? _path;
@@ -247,6 +263,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _path = null;
       _savedText = '';
       _files = const [];
+      _expandedDirectories.clear();
       _messages = const [];
       _loading = true;
       _error = null;
@@ -298,6 +315,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _code.value = TextEditingValue(text: content);
       setState(() {
         _path = path;
+        _expandedDirectories.addAll(_parentDirectories(path));
       });
       _editorFocus.requestFocus();
     } catch (error) {
@@ -305,6 +323,63 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Iterable<String> _parentDirectories(String path) sync* {
+    final segments = path.split('/');
+    for (var index = 1; index < segments.length; index++) {
+      yield segments.take(index).join('/');
+    }
+  }
+
+  List<FileTreeNode> _fileTree() {
+    final root = FileTreeNode.directory('', '');
+    final directories = <String, FileTreeNode>{'': root};
+    for (final filePath in _files) {
+      final segments = filePath.split('/');
+      var parent = root;
+      for (var index = 0; index < segments.length - 1; index++) {
+        final directoryPath = segments.take(index + 1).join('/');
+        parent = directories.putIfAbsent(directoryPath, () {
+          final directory = FileTreeNode.directory(
+            segments[index],
+            directoryPath,
+          );
+          parent.children.add(directory);
+          return directory;
+        });
+      }
+      parent.children.add(FileTreeNode.file(segments.last, filePath));
+    }
+    void sortNodes(FileTreeNode node) {
+      node.children.sort((left, right) {
+        if (left.isDirectory != right.isDirectory) {
+          return left.isDirectory ? -1 : 1;
+        }
+        return left.name.toLowerCase().compareTo(right.name.toLowerCase());
+      });
+      for (final child in node.children) {
+        if (child.isDirectory) sortNodes(child);
+      }
+    }
+
+    sortNodes(root);
+    return root.children;
+  }
+
+  List<(FileTreeNode, int)> _visibleTreeNodes() {
+    final visible = <(FileTreeNode, int)>[];
+    void addNodes(List<FileTreeNode> nodes, int depth) {
+      for (final node in nodes) {
+        visible.add((node, depth));
+        if (node.isDirectory && _expandedDirectories.contains(node.path)) {
+          addNodes(node.children, depth + 1);
+        }
+      }
+    }
+
+    addNodes(_fileTree(), 0);
+    return visible;
   }
 
   Future<void> _save() async {
@@ -1050,32 +1125,50 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       Expanded(
         child: _files.isEmpty
             ? const Center(child: Text('No files'))
-            : ListView.builder(
-                itemCount: _files.length,
-                itemBuilder: (context, index) {
-                  final file = _files[index];
-                  final depth = '/'.allMatches(file).length;
-                  return ListTile(
-                    dense: true,
-                    selected: file == _path,
-                    contentPadding: EdgeInsets.only(
-                      left: 10.0 + depth * 10,
-                      right: 8,
-                    ),
-                    leading: const Icon(Icons.description_outlined, size: 17),
-                    title: Text(
-                      file.split('/').last,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                    subtitle: depth == 0
-                        ? null
-                        : Text(
-                            file,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 10),
-                          ),
-                    onTap: () => _openFile(file),
+            : Builder(
+                builder: (context) {
+                  final nodes = _visibleTreeNodes();
+                  return ListView.builder(
+                    itemCount: nodes.length,
+                    itemBuilder: (context, index) {
+                      final (node, depth) = nodes[index];
+                      final isExpanded = _expandedDirectories.contains(
+                        node.path,
+                      );
+                      return ListTile(
+                        dense: true,
+                        selected: !node.isDirectory && node.path == _path,
+                        minLeadingWidth: 24,
+                        horizontalTitleGap: 4,
+                        contentPadding: EdgeInsets.only(
+                          left: 10.0 + depth * 10,
+                          right: 8,
+                        ),
+                        leading: node.isDirectory
+                            ? Icon(
+                                isExpanded
+                                    ? Icons.folder_open_outlined
+                                    : Icons.folder_outlined,
+                                size: 18,
+                                color: const Color(0xFFD6A84A),
+                              )
+                            : const Icon(Icons.description_outlined, size: 17),
+                        title: Text(
+                          node.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                        onTap: node.isDirectory
+                            ? () => setState(() {
+                                if (isExpanded) {
+                                  _expandedDirectories.remove(node.path);
+                                } else {
+                                  _expandedDirectories.add(node.path);
+                                }
+                              })
+                            : () => _openFile(node.path),
+                      );
+                    },
                   );
                 },
               ),
