@@ -1,8 +1,78 @@
-"""Repository-backed Codex workspace deployed on Modal.
+"""Modal app and ``origin/main`` deployment launcher.
 
-Deploy with `modal deploy modal_app.py`. Project data and Codex authentication
-live on the durable `cloud-code-editor-projects` Volume mounted at /projects.
+Run ``python3 deploy.py`` to deploy a clean archive of the newest
+``origin/main`` revision. The Modal app is evaluated in that archive, so
+uncommitted files and an outdated checkout are never released.
 """
+
+import io
+import os
+import subprocess
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent
+ORIGIN_DEPLOY_ENV = "CODE_EDITOR_DEPLOYING_ORIGIN_MAIN"
+
+
+def run_git(*arguments: str, capture_output: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ("git", *arguments),
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=capture_output,
+    )
+
+
+def deploy_origin_main() -> int:
+    """Fetch and deploy the exact current ``origin/main`` tree."""
+    try:
+        run_git("fetch", "origin", "main")
+        revision = run_git("rev-parse", "origin/main", capture_output=True).stdout
+        revision = revision.decode().strip()
+        archive = run_git("archive", "--format=tar", revision, capture_output=True).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"Unable to prepare origin/main for deployment: {error}", file=sys.stderr)
+        return 1
+
+    with tempfile.TemporaryDirectory(prefix="code-editor-deploy-") as temporary:
+        release_root = Path(temporary)
+        try:
+            with tarfile.open(fileobj=io.BytesIO(archive)) as release:
+                release.extractall(release_root, filter="data")
+        except tarfile.TarError as error:
+            print(f"Unable to unpack origin/main revision {revision}: {error}", file=sys.stderr)
+            return 1
+
+        deploy_file = release_root / "deploy.py"
+        if not deploy_file.is_file():
+            print(
+                "origin/main does not contain deploy.py; commit and push this file first.",
+                file=sys.stderr,
+            )
+            return 1
+
+        environment = os.environ | {ORIGIN_DEPLOY_ENV: "1"}
+        print(f"Deploying origin/main at {revision}")
+        try:
+            result = subprocess.run(
+                ("modal", "deploy", "deploy.py"),
+                cwd=release_root,
+                env=environment,
+                check=False,
+            )
+        except OSError as error:
+            print(f"Unable to run Modal CLI: {error}", file=sys.stderr)
+            return 1
+        return result.returncode
+
+
+if __name__ == "__main__" and os.environ.get(ORIGIN_DEPLOY_ENV) != "1":
+    raise SystemExit(deploy_origin_main())
+
 
 import modal
 

@@ -71,7 +71,7 @@ The deployment intentionally fails if that secret or any required key is
 missing; there is no anonymous mode.
 
 ```sh
-modal deploy modal_app.py
+python3 deploy.py
 ```
 
 The first image build installs Flutter, FastAPI, Git, and the pinned Codex
@@ -91,7 +91,7 @@ dedicated secret before use.
 
 ## Local Flutter development
 
-The web UI expects the same-origin `/api` routes supplied by `modal_app.py`.
+The web UI expects the same-origin `/api` routes supplied by `deploy.py`.
 For UI-only work, install Flutter and run:
 
 ```sh
