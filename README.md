@@ -125,6 +125,10 @@ For UI-only work, install Flutter and run:
 
 ```sh
 flutter pub get
+# Builds the pinned Tree-sitter runtime and language grammars used by the editor.
+npm ci
+npm run build:tree-sitter
+dart analyze
 flutter run -d chrome
 ```
 
