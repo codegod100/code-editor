@@ -1137,7 +1137,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       children: [
         const Icon(Icons.auto_awesome, size: 22),
         const SizedBox(width: 10),
-        const Text('Codex Workspace'),
+        Flexible(child: Text(_project == null ? 'Codex Workspace' : 'Codex Workspace — ${_project!.name}', overflow: TextOverflow.ellipsis)),
         const SizedBox(width: 24),
         if (_projects.isNotEmpty)
           DropdownButtonHideUnderline(
