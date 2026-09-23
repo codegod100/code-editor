@@ -205,6 +205,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _codexConnected = false;
   GitStatus? _gitStatus;
   bool _gitBusy = false;
+  bool _diffBusy = false;
   String _userName = '';
   String _userEmail = '';
   String? _loginUrl;
@@ -463,6 +464,43 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       if (mounted) setState(() => _gitStatus = GitStatus.fromJson(response));
     } catch (error) {
       if (mounted) setState(() => _gitStatus = null);
+    }
+  }
+
+  Future<void> _showCurrentThreadDiff() async {
+    if (_project?.isRepo != true || _diffBusy) return;
+    setState(() => _diffBusy = true);
+    try {
+      final response = await _request('GET', _projectUrl('/git/diff'));
+      if (!mounted) return;
+      final diff = response['diff'] as String? ?? '';
+      final branch = response['branch'] as String? ?? '';
+      final truncated = response['truncated'] as bool? ?? false;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(branch.isEmpty ? 'Current work thread diff' : 'Current work thread diff — $branch'),
+          content: SizedBox(
+            width: 900,
+            height: 560,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (truncated) const Padding(padding: EdgeInsets.only(bottom: 12), child: Text('Diff is truncated at 2 MiB.')),
+                Expanded(child: SelectionArea(child: SingleChildScrollView(child: Text(
+                  diff.isEmpty ? 'No changes in this work thread.' : diff,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                )))),
+              ],
+            ),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+        ),
+      );
+    } catch (error) {
+      _showError(error);
+    } finally {
+      if (mounted) setState(() => _diffBusy = false);
     }
   }
 
@@ -1499,6 +1537,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           visualDensity: VisualDensity.compact,
           onPressed: _project?.isRepo == true && !_gitBusy ? _refreshGitStatus : null,
           icon: const Icon(Icons.sync_outlined, size: 18),
+        ),
+        IconButton(
+          tooltip: 'Show diff for current work thread',
+          visualDensity: VisualDensity.compact,
+          onPressed: _project?.isRepo == true && !_diffBusy ? _showCurrentThreadDiff : null,
+          icon: _diffBusy
+              ? const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.difference_outlined, size: 18),
         ),
         IconButton(
           tooltip: _agentStopping ? 'Stopping agent' : 'Stop agent',
