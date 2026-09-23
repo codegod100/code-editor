@@ -76,6 +76,7 @@ def serve():
     max_text_bytes = 2 * 1024 * 1024
     mutation_lock = asyncio.Lock()
     active_turns = {}
+    agent_runs = {}
     terminal_sessions = {}
 
     app_url = os.environ["APP_URL"].rstrip("/")
@@ -655,21 +656,50 @@ def serve():
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    @api.post("/api/projects/{name}/agent")
-    async def run_agent(name: str, request: Request):
-        project = project_dir(name)
-        body = await request.json()
-        prompt = str(body.get("prompt", "")).strip()
-        if not prompt:
-            raise HTTPException(400, "prompt is required")
-        async with mutation_lock:
-            session = read_session(project)
+    def agent_activity(event) -> dict | None:
+        """Turn an SDK notification into a small, user-facing progress update."""
+        if event.method != "item/started":
+            return None
+        item = getattr(event.payload.item, "root", event.payload.item)
+        item_type = getattr(item, "type", "")
+        if item_type == "commandExecution":
+            command = " ".join(getattr(item, "command", "").split())
+            return {"type": "activity", "text": f"Running: {command}"}
+        if item_type == "fileChange":
+            paths = [change.path for change in getattr(item, "changes", [])]
+            description = ", ".join(paths[:3])
+            if len(paths) > 3:
+                description += ", …"
+            return {
+                "type": "activity",
+                "text": f"Editing {description}" if description else "Editing files",
+            }
+        if item_type == "reasoning":
+            return {"type": "activity", "text": "Planning the next step"}
+        if item_type == "agentMessage":
+            return {"type": "activity", "text": "Preparing a response"}
+        return None
 
+    async def execute_agent_run(name: str, project: Path, prompt: str, run: dict):
+        """Run Codex and make its non-sensitive progress available to the chat UI."""
+        queue = run["events"]
+
+        def emit(value: dict) -> None:
+            queue.put_nowait(value)
+
+        response_parts = []
+        completed_response = ""
+        try:
+            emit({"type": "activity", "text": "Starting Codex"})
             async with AsyncCodex() as codex:
                 account = await codex.account()
                 if account.account is None:
-                    raise HTTPException(401, "connect Codex before running an agent")
+                    raise RuntimeError("connect Codex before running an agent")
+                if run["stopped"]:
+                    raise RuntimeError("agent turn was stopped")
 
+                async with mutation_lock:
+                    session = read_session(project)
                 if session.get("threadId"):
                     thread = await codex.thread_resume(
                         session["threadId"],
@@ -690,35 +720,87 @@ def serve():
                     )
 
                 turn = await thread.turn(prompt)
-                active_turn = {"turn": turn, "stopped": False}
-                active_turns[name] = active_turn
-                try:
-                    result = await turn.run()
-                    response_text = result.final_response or ""
-                except Exception as exc:
-                    if active_turn["stopped"]:
-                        response_text = "Stopped."
-                    else:
-                        raise HTTPException(500, f"Codex turn failed: {exc}") from exc
-                finally:
-                    if active_turns.get(name) is active_turn:
-                        active_turns.pop(name)
+                run["turn"] = turn
+                if run["stopped"]:
+                    await turn.interrupt()
+                async for event in turn.stream():
+                    activity = agent_activity(event)
+                    if activity is not None:
+                        emit(activity)
+                    if event.method == "item/agentMessage/delta":
+                        response_parts.append(event.payload.delta)
+                        emit({"type": "response_delta", "text": event.payload.delta})
+                    elif event.method == "item/completed":
+                        item = getattr(event.payload.item, "root", event.payload.item)
+                        if getattr(item, "type", "") == "agentMessage" and getattr(
+                            getattr(item, "phase", None), "value", None
+                        ) == "final_answer":
+                            completed_response = item.text
 
-            messages = list(session.get("messages", []))
-            messages.extend(
-                [
-                    {"role": "user", "text": prompt},
-                    {"role": "assistant", "text": response_text},
-                ]
-            )
-            session = {"threadId": thread.id, "messages": messages[-100:]}
-            write_session(project, session)
-            await commit()
-        return {
-            "threadId": thread.id,
-            "response": response_text,
-            "messages": session["messages"],
-        }
+                response_text = completed_response or "".join(response_parts)
+                async with mutation_lock:
+                    messages = list(session.get("messages", []))
+                    messages.extend(
+                        [
+                            {"role": "user", "text": prompt},
+                            {"role": "assistant", "text": response_text},
+                        ]
+                    )
+                    persisted = {"threadId": thread.id, "messages": messages[-100:]}
+                    write_session(project, persisted)
+                    await commit()
+                emit({"type": "complete", "messages": persisted["messages"]})
+        except Exception as exc:
+            if run["stopped"]:
+                emit({"type": "complete", "messages": None, "response": "Stopped."})
+            else:
+                emit({"type": "error", "error": str(exc)})
+        finally:
+            run["complete"] = True
+            queue.put_nowait(None)
+            if active_turns.get(name) is run:
+                active_turns.pop(name, None)
+
+    @api.post("/api/projects/{name}/agent")
+    async def run_agent(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        prompt = str(body.get("prompt", "")).strip()
+        if not prompt:
+            raise HTTPException(400, "prompt is required")
+        async with mutation_lock:
+            if name in active_turns:
+                raise HTTPException(409, "an agent turn is already running")
+            run_id = os.urandom(16).hex()
+            run = {"events": asyncio.Queue(), "stopped": False, "complete": False}
+            active_turns[name] = run
+            agent_runs[run_id] = run
+            run["task"] = asyncio.create_task(execute_agent_run(name, project, prompt, run))
+        return {"runId": run_id}
+
+    @api.get("/api/projects/{name}/agent/events/{run_id}")
+    async def agent_events(name: str, run_id: str):
+        project_dir(name)
+        run = agent_runs.get(run_id)
+        if run is None:
+            raise HTTPException(404, "agent run not found")
+
+        async def events():
+            try:
+                while True:
+                    event = await run["events"].get()
+                    if event is None:
+                        break
+                    yield "data: " + json.dumps(event) + "\n\n"
+            finally:
+                if run["complete"]:
+                    agent_runs.pop(run_id, None)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @api.post("/api/projects/{name}/agent/stop")
     async def stop_agent(name: str):
@@ -727,7 +809,8 @@ def serve():
         if active_turn is None:
             raise HTTPException(409, "no agent turn is running")
         active_turn["stopped"] = True
-        await active_turn["turn"].interrupt()
+        if active_turn.get("turn") is not None:
+            await active_turn["turn"].interrupt()
         return {"stopped": True}
 
     api.mount("/", StaticFiles(directory="/app/build/web", html=True), name="web")
