@@ -37,7 +37,7 @@ class q {
         await C.exists() && (B = await C.arrayBuffer());
       } catch {
       }
-    if (!B)
+    if (!B && typeof process < "u" && process.versions?.node)
       try {
         const I = await (await import("./__vite-browser-external-2447137e.js")).readFile(A);
         B = I.buffer.slice(I.byteOffset, I.byteOffset + I.byteLength);
