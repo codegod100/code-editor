@@ -2310,6 +2310,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ) ??
         false;
     if (!confirmed) return;
+    setState(() => _loading = true);
     try {
       await _request(
         'DELETE',
@@ -2320,6 +2321,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       await _loadSession();
     } catch (error) {
       _showError(error);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 

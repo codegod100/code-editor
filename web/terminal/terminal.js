@@ -40,7 +40,9 @@ socket.addEventListener('message', (event) => {
 });
 socket.addEventListener('close', (event) => {
   connected = false;
-  status.textContent = event.code === 1000 ? 'Disconnected' : 'Terminal disconnected';
+  status.textContent = event.code === 1000
+    ? 'Disconnected'
+    : `Terminal disconnected${event.reason ? `: ${event.reason}` : ''}`;
 });
 socket.addEventListener('error', () => { status.textContent = 'Terminal error'; });
 
