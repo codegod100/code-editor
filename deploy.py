@@ -1188,7 +1188,6 @@ def serve():
         response_parts = []
         completed_response = ""
         try:
-            emit({"type": "activity", "text": "Starting Codex"})
             async with AsyncCodex() as codex:
                 account = await codex.account()
                 if account.account is None:
