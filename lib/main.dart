@@ -2171,14 +2171,24 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Future<void> _resetAgent() async {
-    if (_project == null) return;
+    final project = _project;
+    if (project == null) return;
+    if (!project.isRepo) {
+      _showError('A new work thread requires a Git repository.');
+      return;
+    }
+    if (_runningWorkThreads.isNotEmpty) {
+      _showError('Stop running work threads before creating a new one.');
+      return;
+    }
+    if (_dirty && !await _confirmDiscard()) return;
     final confirmed =
         await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Create another work thread?'),
+            title: const Text('Create an isolated work thread?'),
             content: const Text(
-              'The current thread keeps running and stays available. The new thread starts with an empty conversation.',
+              'The current thread stays available. The new thread starts on its own codex/work-thread branch and Git worktree, then opens as a separate workspace.',
             ),
             actions: [
               TextButton(
@@ -2187,18 +2197,21 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Create thread'),
+                child: const Text('Create worktree'),
               ),
             ],
           ),
         ) ??
         false;
     if (!confirmed) return;
+    setState(() => _loading = true);
     try {
-      await _request('DELETE', _projectUrl('/session'));
-      await _loadSession();
+      final response = await _request('POST', _projectUrl('/workthreads'));
+      await _refreshProjects(select: response['name'] as String);
     } catch (error) {
       _showError(error);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 

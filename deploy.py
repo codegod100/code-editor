@@ -1323,6 +1323,38 @@ def serve():
             await commit()
         return session
 
+    @api.post("/api/projects/{name}/workthreads")
+    async def create_work_thread(name: str):
+        project = project_dir(name)
+        if not (project / ".git").exists():
+            raise HTTPException(400, "work threads require a Git repository")
+        async with mutation_lock:
+            for _ in range(10):
+                suffix = secrets.token_hex(4)
+                workspace_name = f"{name}-work-thread-{suffix}"
+                branch = f"codex/work-thread-{suffix}"
+                destination = root / workspace_name
+                if not destination.exists():
+                    break
+            else:
+                raise HTTPException(409, "could not allocate a unique worktree name")
+            result = await asyncio.to_thread(
+                git_result,
+                project,
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                str(destination),
+                "HEAD",
+                timeout=120,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not create work thread"))
+            write_session(destination, {"threadId": None, "messages": []})
+            await commit()
+        return {"name": workspace_name, "branch": branch, "startPoint": "HEAD"}
+
     @api.patch("/api/projects/{name}/session")
     async def select_session_thread(name: str, request: Request):
         project = project_dir(name)
