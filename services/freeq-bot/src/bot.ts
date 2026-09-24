@@ -28,6 +28,9 @@ if (channels.length === 0 || channels.some((channel) => !channel.startsWith("#")
 if (!/^[a-z][a-z0-9_]{0,63}$/.test(CAPABILITY)) {
   throw new Error("FREEQ_CAPABILITY must be a lowercase identifier");
 }
+const channelCapabilities = channels.map(
+  (channel) => JSON.stringify(channel) + " = [" + JSON.stringify(CAPABILITY) + "]",
+);
 
 function required(key: string): string {
   const value = process.env[key]?.trim();
@@ -54,10 +57,20 @@ const bot = await FreeqBot.create({
     'source_repo = "https://github.com/codegod100/code-editor"',
     'version = "0.1.0"',
     "",
+    "[provenance]",
+    'origin_type = "custom"',
+    "creator_did = " + JSON.stringify(ownerDid),
+    "revocation_authority = " + JSON.stringify(ownerDid),
+    'authority_basis = "Operated by the Code Editor owner"',
+    "",
     "[capabilities]",
     "default = [" + JSON.stringify(CAPABILITY) + "]",
     "",
     "[capabilities.channels]",
+    ...channelCapabilities,
+    "",
+    "[presence]",
+    "heartbeat_interval_seconds = 30",
   ].join("\n"),
 });
 
