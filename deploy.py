@@ -1258,11 +1258,16 @@ def serve():
             environment = os.environ.copy()
             environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
             process = subprocess.Popen(
-                # The container's root-shell startup files can change directory to the
-                # Volume's backing path (``/__modal/volumes/...``).  This terminal is
-                # explicitly project-rooted, so do not source host/container shell
-                # configuration that can override ``cwd``.
-                ["bash", "--noprofile", "--norc", "-i"],
+                # Modal's root-shell configuration has previously changed a child
+                # shell from the requested cwd to the Volume backing path
+                # (``/__modal/volumes/...``).  Set the directory in a clean,
+                # non-interactive parent shell as well as in Popen so the interactive
+                # shell inherits the selected project directory deterministically.
+                [
+                    "bash", "--noprofile", "--norc", "-c",
+                    'cd -- "$1" || exit 1\nexec bash --noprofile --norc -i',
+                    "bash", str(project),
+                ],
                 cwd=str(project),
                 stdin=slave_fd,
                 stdout=slave_fd,
