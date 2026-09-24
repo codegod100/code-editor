@@ -1051,7 +1051,11 @@ def serve():
             environment = os.environ.copy()
             environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
             process = subprocess.Popen(
-                ["bash", "-i"],
+                # The container's root-shell startup files can change directory to the
+                # Volume's backing path (``/__modal/volumes/...``).  This terminal is
+                # explicitly project-rooted, so do not source host/container shell
+                # configuration that can override ``cwd``.
+                ["bash", "--noprofile", "--norc", "-i"],
                 cwd=str(project),
                 stdin=slave_fd,
                 stdout=slave_fd,
@@ -1188,7 +1192,6 @@ def serve():
         response_parts = []
         completed_response = ""
         try:
-            emit({"type": "activity", "text": "Starting Codex"})
             async with AsyncCodex() as codex:
                 account = await codex.account()
                 if account.account is None:

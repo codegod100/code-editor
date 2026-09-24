@@ -1843,7 +1843,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     ),
   );
 
-  PreferredSizeWidget _buildAppBar() => AppBar(
+  PreferredSizeWidget _buildAppBar() {
+    final project = _project;
+    final projectLabel = project == null
+        ? 'Codex Workspace'
+        : project.repoUrl.isEmpty
+        ? project.name
+        : project.repoUrl;
+
+    return AppBar(
     titleSpacing: 16,
     title: Row(
       children: [
@@ -1851,9 +1859,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         const SizedBox(width: 10),
         Flexible(
           child: Text(
-            _project == null
-                ? 'Codex Workspace'
-                : 'Codex Workspace — ${_project!.repoUrl.isEmpty ? _project!.name : _project!.repoUrl}',
+            project == null
+                ? projectLabel
+                : 'Codex Workspace — $projectLabel',
             overflow: TextOverflow.ellipsis,
           ),
         ),
@@ -1907,7 +1915,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         icon: const Icon(Icons.add),
         label: const Text('Project'),
       ),
-      if (_project != null)
+      if (project != null)
         PopupMenuButton<String>(
           tooltip: 'Project actions',
           onSelected: (value) {
@@ -1991,6 +1999,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ),
     ],
   );
+  }
 
   Widget _buildLoginBanner() => MaterialBanner(
     leading: const Icon(Icons.login),
