@@ -913,6 +913,11 @@ def serve():
             "channel": channel,
             "capability": capability,
             "title": title[:500],
+            # Keep the exchange address structured as well as in the task
+            # instructions.  FreeQ clients may abbreviate or omit long ctx
+            # values when rendering an offer, but the worker must receive the
+            # exact clone URL.
+            "exchangeUrl": exchange_url,
             "context": "\n\n".join(
                 part for part in (worker_repository_context, context[:4000]) if part
             ),

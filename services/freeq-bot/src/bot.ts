@@ -11,6 +11,7 @@
 
 import { FreeqBot } from "@freeq/bot-kit";
 import { actTags } from "@freeq/sdk";
+import { handoffPrompt } from "./handoff.ts";
 import { capacity, proofUrl, runTask } from "./prime.ts";
 
 const CAPABILITY = required("FREEQ_CAPABILITY");
@@ -122,8 +123,7 @@ bot.on("actEvent", async (event) => {
   if (event.fields["act-caps"] !== CAPABILITY) return;
 
   const title = event.fields["act-title"]?.trim() ?? "";
-  const context = event.fields["act-ctx"]?.trim() ?? "";
-  const prompt = [title, context].filter(Boolean).join("\n\n");
+  const prompt = handoffPrompt(event.fields);
   if (!prompt) {
     console.error("[worker] ignored " + event.taskId + ": no title or context");
     return;

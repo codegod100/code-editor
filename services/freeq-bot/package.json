@@ -18,6 +18,7 @@
   "scripts": {
     "start": "tsx src/bot.ts",
     "dev": "tsx watch src/bot.ts",
+    "test": "tsx --test src/*.test.ts",
     "typecheck": "tsc --noEmit"
   }
 }

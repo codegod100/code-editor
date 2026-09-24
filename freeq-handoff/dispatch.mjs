@@ -2,6 +2,7 @@
 /** Connect for one open handoff's lifecycle, then exit. */
 import { FreeqBot } from '@freeq/bot-kit';
 import { actTags } from '@freeq/sdk';
+import { offerFields } from './offer-fields.mjs';
 
 const input = JSON.parse(await new Promise((resolve, reject) => {
   let value = '';
@@ -15,6 +16,9 @@ for (const key of ['channel', 'title', 'capability', 'serverUrl']) {
   if (typeof input[key] !== 'string' || !input[key].trim()) {
     throw new Error(`handoff ${key} is required`);
   }
+}
+if (typeof input.exchangeUrl !== 'string' || !input.exchangeUrl.trim()) {
+  throw new Error('handoff exchangeUrl is required');
 }
 for (const key of ['FREEQ_OWNER_DID', 'FREEQ_BOT_NICK', 'FREEQ_BOT_ROOT']) {
   if (!process.env[key]) throw new Error(`${key} is required`);
@@ -54,11 +58,7 @@ try {
   // event id is the task id used by every later accept/complete/fail act.
   taskId = await bot.client.sendAct(
     input.channel,
-    actTags('handoff', 'offer', undefined, bot.identity.did, {
-      title: input.title,
-      caps: input.capability,
-      ctx: input.context || '',
-    }),
+    actTags('handoff', 'offer', undefined, bot.identity.did, offerFields(input)),
   );
   process.stdout.write(JSON.stringify({ type: 'offered', taskId }) + '\n');
   const outcome = await Promise.race([

@@ -2,6 +2,9 @@
   "name": "cloud-code-editor-freeq-handoff",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  },
   "dependencies": {
     "@atproto/oauth-client-node": "^0.3.17",
     "@freeq/bot-kit": "0.1.0",
