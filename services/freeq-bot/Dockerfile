@@ -1,4 +1,4 @@
-FROM node:22-alpine
+FROM node:24-alpine
 
 # su-exec drops privileges in the entrypoint, after it has fixed ownership of
 # the mounted volume (Fly mounts volumes root-owned regardless of USER).
