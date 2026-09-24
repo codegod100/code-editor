@@ -1306,24 +1306,11 @@ def serve():
             raise HTTPException(400, "work thread name is required")
         if len(new_name) > 100:
             raise HTTPException(400, "work thread name must be 100 characters or fewer")
-        archive_current = body.get("archiveCurrent", False) is True
         async with mutation_lock:
             session = read_session(project)
             now = datetime.now(timezone.utc).isoformat()
             new_id = os.urandom(8).hex()
             threads = list(session.get("threads", []))
-            if archive_current:
-                current = session_thread(session, session.get("activeThreadId"))
-                if current.get("threadId") or current.get("messages"):
-                    history = list(session.get("history", []))
-                    history.append({
-                        "name": current.get("title", "Untitled thread"),
-                        "threadId": current.get("threadId"),
-                        "messages": current.get("messages", []),
-                        "archivedAt": now,
-                    })
-                    session["history"] = history[-20:]
-                threads = [item for item in threads if item.get("id") != current.get("id")]
             threads.append({
                 "id": new_id,
                 "title": new_name,
@@ -1338,6 +1325,44 @@ def serve():
                 "threadId": None,
                 "messages": [],
             })
+            write_session(project, session)
+            await commit()
+        return session
+
+    @api.delete("/api/projects/{name}/session/{thread_id}")
+    async def archive_session_thread(name: str, thread_id: str):
+        project = project_dir(name)
+        async with mutation_lock:
+            session = read_session(project)
+            thread = session_thread(session, thread_id)
+            if (name, thread_id) in active_turns:
+                raise HTTPException(409, "stop this work thread before archiving it")
+            now = datetime.now(timezone.utc).isoformat()
+            history = list(session.get("history", []))
+            history.append({
+                "name": thread.get("title", "Untitled thread"),
+                "threadId": thread.get("threadId"),
+                "messages": thread.get("messages", []),
+                "archivedAt": now,
+            })
+            threads = [
+                item for item in session.get("threads", [])
+                if item.get("id") != thread_id
+            ]
+            if not threads:
+                threads.append({
+                    "id": os.urandom(8).hex(),
+                    "title": "Work thread 1",
+                    "threadId": None,
+                    "messages": [],
+                    "createdAt": now,
+                    "updatedAt": now,
+                })
+            if session.get("activeThreadId") == thread_id:
+                session["activeThreadId"] = threads[0]["id"]
+            session["threads"] = threads
+            session["history"] = history[-20:]
+            sync_active_thread(session)
             write_session(project, session)
             await commit()
         return session
