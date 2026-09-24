@@ -1089,6 +1089,63 @@ def serve():
             write_session(project, session)
             await commit()
 
+    def worker_handoff_ref(project: Path, handoff: dict) -> str:
+        """Fetch a worker branch into a private, stable local ref for review."""
+        task_id = str(handoff["taskId"])
+        exchange_url = str(handoff.get("exchangeUrl") or "")
+        if not exchange_url.startswith("https://agentgit.co/") or not exchange_url.endswith(".git"):
+            raise HTTPException(400, "this handoff has no valid AgentGit exchange")
+        ref = "refs/code-editor/handoffs/" + re.sub(r"[^A-Za-z0-9._-]", "-", task_id)
+        fetched = git_result(
+            project,
+            "fetch", "--no-tags", exchange_url,
+            f"refs/heads/{handoff.get('workerBranch', 'worker')}:{ref}",
+            timeout=120,
+        )
+        if fetched.returncode:
+            raise HTTPException(502, git_error(fetched, "could not fetch the worker branch"))
+        return ref
+
+    def review_worker_handoff(project: Path, handoff: dict) -> dict:
+        status = git_status(project)
+        if status["changedCount"]:
+            raise HTTPException(409, "commit or discard local changes before reviewing a worker branch")
+        ref = worker_handoff_ref(project, handoff)
+        diff = git_result(
+            project, "diff", "--no-ext-diff", "--binary", "--src-prefix=a/", "--dst-prefix=b/",
+            "HEAD", ref, timeout=60,
+        )
+        if diff.returncode:
+            raise HTTPException(500, git_error(diff, "could not generate the worker diff"))
+        encoded = diff.stdout.encode("utf-8")
+        truncated = len(encoded) > 2 * 1024 * 1024
+        return {
+            "diff": encoded[: 2 * 1024 * 1024].decode("utf-8", errors="ignore") if truncated else diff.stdout,
+            "truncated": truncated,
+            "ref": ref,
+        }
+
+    def incorporate_worker_handoff(project: Path, handoff: dict) -> None:
+        status = git_status(project)
+        if status["changedCount"]:
+            raise HTTPException(409, "commit or discard local changes before incorporating a worker branch")
+        ref = worker_handoff_ref(project, handoff)
+        merge = git_result(
+            project,
+            "-c", "user.name=Cloud Code Editor",
+            "-c", "user.email=cloud-code-editor@users.noreply.github.com",
+            "merge", "--no-ff", "--no-edit", "-m", f"Incorporate FreeQ worker handoff {handoff['taskId'][-6:]}", ref,
+            timeout=120,
+        )
+        if merge.returncode:
+            # A failed merge must not leave the editor checkout in a partial
+            # conflict state. The user can resolve it manually from the review
+            # diff, while their original clean checkout remains unchanged.
+            abort = git_result(project, "merge", "--abort", timeout=60)
+            if abort.returncode:
+                raise HTTPException(500, git_error(abort, "worker merge failed and could not be aborted"))
+            raise HTTPException(409, git_error(merge, "worker branch conflicts with the current project"))
+
     async def monitor_freeq_handoff(name: str, project: Path, handoff: dict, process) -> None:
         """Keep the short-lived bot connected and return its terminal result."""
         task_id = handoff["taskId"]
@@ -1153,7 +1210,7 @@ def serve():
         handoff = next((item for item in session.get("handoffs", []) if item.get("taskId") == task_id), None)
         if handoff is None:
             raise HTTPException(404, "FreeQ handoff not found")
-        if handoff.get("status") in {"complete", "fail", "decline", "timeout"}:
+        if handoff.get("status") in {"complete", "incorporated", "fail", "decline", "timeout"}:
             return {"taskId": task_id, "status": handoff["status"], "note": handoff.get("note", ""), "botName": handoff.get("botName", "Open channel offer"), "exchangeUrl": handoff.get("exchangeUrl", "")}
         if task_id in freeq_handoff_runs:
             return {"taskId": task_id, "status": handoff.get("status", "offered"), "note": handoff.get("note", ""), "botName": handoff.get("botName", "Open channel offer"), "exchangeUrl": handoff.get("exchangeUrl", "")}
@@ -1192,6 +1249,41 @@ def serve():
                 write_session(project, session)
                 await commit()
         return {"taskId": task_id, "status": latest, "note": note, "botName": claimant, "exchangeUrl": handoff.get("exchangeUrl", "")}
+
+    @api.get("/api/projects/{name}/freeq/handoffs/{task_id}/review")
+    async def review_freeq_handoff(name: str, task_id: str):
+        project = project_dir(name)
+        session = read_session(project)
+        handoff = next((item for item in session.get("handoffs", []) if item.get("taskId") == task_id), None)
+        if handoff is None:
+            raise HTTPException(404, "FreeQ handoff not found")
+        if handoff.get("status") not in {"complete", "incorporated"}:
+            raise HTTPException(409, "the worker has not completed this handoff")
+        return await asyncio.to_thread(review_worker_handoff, project, handoff)
+
+    @api.post("/api/projects/{name}/freeq/handoffs/{task_id}/incorporate")
+    async def incorporate_freeq_handoff(name: str, task_id: str):
+        project = project_dir(name)
+        async with mutation_lock:
+            session = read_session(project)
+            handoff = next((item for item in session.get("handoffs", []) if item.get("taskId") == task_id), None)
+            if handoff is None:
+                raise HTTPException(404, "FreeQ handoff not found")
+            if handoff.get("status") == "incorporated":
+                raise HTTPException(409, "this worker result has already been incorporated")
+            if handoff.get("status") != "complete":
+                raise HTTPException(409, "the worker has not completed this handoff")
+            await asyncio.to_thread(incorporate_worker_handoff, project, handoff)
+            handoff["status"] = "incorporated"
+            handoff["note"] = "Worker branch incorporated into the current project."
+            session.setdefault("messages", []).append({
+                "role": "assistant",
+                "text": f"Incorporated reviewed FreeQ worker result: {handoff['title']}",
+            })
+            session["messages"] = session["messages"][-100:]
+            write_session(project, session)
+            await commit()
+        return {"message": "Worker branch incorporated", "status": git_status(project)}
 
     def stop_terminal_session(session):
         import signal

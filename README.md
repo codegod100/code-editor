@@ -75,8 +75,11 @@ missing; there is no anonymous mode.
 The Agent panel's FreeQ button discovers published bot manifests from the
 canonical server, then sends a signed, open `handoff/offer` into the configured
 channel. Any capable bot there may claim it. Its `accept`, `complete`, `fail`,
-or `decline` act is read from the channel audit trail; a completion resumes the
-project's existing Codex thread, which inspects and incorporates the result.
+or `decline` act is read from the channel audit trail. After a completion, open
+the completed handoff in the Agent panel and choose **Review & incorporate**:
+the editor fetches the worker's `worker` branch, shows its diff against the
+current checkout, and creates a merge commit only after confirmation. The
+project must be clean; merge conflicts are aborted so the checkout stays clean.
 
 The editor uses the DID returned by the current AT Protocol OAuth session as
 the FreeQ sender owner. Its nick is the signed-in handle plus `-editor`, with
