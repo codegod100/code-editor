@@ -80,7 +80,9 @@ jobs:
             )"
             if [[ "$app_state" == "deployed" ]]; then
               echo "Modal API verified cloud-code-editor is deployed."
-              python -c '
+              # A deployed app can still route requests to the previous release
+              # during rollout. Retry until the health endpoint confirms this SHA.
+              if python -c '
           import json
           import os
           import sys
@@ -94,12 +96,13 @@ jobs:
                 f"unexpected health response: {health!r}; "
                 f"expected release {expected_release!r}"
               )
-          '
-              echo "Health endpoint verified deployed release $GITHUB_SHA."
-              exit 0
+          '; then
+                echo "Health endpoint verified deployed release $GITHUB_SHA."
+                exit 0
+              fi
             fi
             echo "Modal API reports cloud-code-editor state: $app_state (attempt $attempt/30)"
             sleep 10
           done
-          echo "Modal API did not report cloud-code-editor as deployed within 5 minutes." >&2
+          echo "Modal deployment did not become healthy at the expected release within 30 attempts." >&2
           exit 1
