@@ -199,8 +199,10 @@ def serve():
     root = Path("/workspace")
     root.mkdir(parents=True, exist_ok=True)
     (root / ".codex").mkdir(parents=True, exist_ok=True)
+    session_root = root / ".code-editor"
+    session_root.mkdir(parents=True, exist_ok=True)
     project_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-    reserved = {".atproto-oauth", ".codex", ".freeq-bots", ".system"}
+    reserved = {".atproto-oauth", ".code-editor", ".codex", ".freeq-bots", ".system"}
     max_text_bytes = 2 * 1024 * 1024
     mutation_lock = asyncio.Lock()
     active_turns = {}
@@ -680,6 +682,7 @@ def serve():
         path = root / name
         if not path.is_dir():
             raise HTTPException(404, "project not found")
+        migrate_legacy_session(path)
         return path
 
     def requested_file(project: Path, value: str) -> Path:
@@ -694,7 +697,26 @@ def serve():
         return path
 
     def session_path(project: Path) -> Path:
-        return project / ".code-editor" / "session.json"
+        return session_root / project.name / "session.json"
+
+    def migrate_legacy_session(project: Path) -> None:
+        """Move editor-owned state out of an existing project checkout."""
+        legacy_directory = project / ".code-editor"
+        legacy_path = legacy_directory / "session.json"
+        path = session_path(project)
+        if not path.exists() and legacy_path.is_file():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(legacy_path, path)
+            except FileNotFoundError:
+                # Another concurrent request may have completed the migration.
+                if not path.exists():
+                    raise
+        try:
+            legacy_directory.rmdir()
+        except OSError:
+            # Preserve unexpected files rather than deleting user data.
+            pass
 
     def read_session(project: Path) -> dict:
         path = session_path(project)
@@ -819,7 +841,7 @@ def serve():
         if head.returncode == 0:
             return
 
-        add = git_result(project, "add", "-A", "--", ".", ":(exclude).code-editor", timeout=120)
+        add = git_result(project, "add", "-A", "--", ".", timeout=120)
         if add.returncode:
             raise HTTPException(500, git_error(add, "could not stage the initial commit"))
         initial_commit = git_result(
@@ -1047,7 +1069,13 @@ def serve():
             destination = root / new_name
             if destination.exists():
                 raise HTTPException(409, "project already exists")
+            old_session_directory = session_root / name
+            new_session_directory = session_root / new_name
+            if new_session_directory.exists():
+                raise HTTPException(409, "project session already exists")
             os.replace(project, destination)
+            if old_session_directory.exists():
+                os.replace(old_session_directory, new_session_directory)
             await commit()
         return {"name": new_name}
 
@@ -1082,7 +1110,7 @@ def serve():
     async def file_tree(name: str):
         project = project_dir(name)
         entries = []
-        ignored = {".git", ".code-editor", "build", ".dart_tool", "node_modules"}
+        ignored = {".git", "build", ".dart_tool", "node_modules"}
         for base, directories, files in os.walk(project):
             directories[:] = sorted(item for item in directories if item not in ignored)
             relative_base = Path(base).relative_to(project)
@@ -1197,9 +1225,7 @@ def serve():
         if not git_status(project)["isRepo"]:
             raise HTTPException(400, "this project is not a Git repository")
         async with mutation_lock:
-            add = await asyncio.to_thread(
-                git_result, project, "add", "-A", "--", ".", ":(exclude).code-editor"
-            )
+            add = await asyncio.to_thread(git_result, project, "add", "-A", "--", ".")
             if add.returncode:
                 raise HTTPException(400, git_error(add, "could not stage changes"))
             # Projects are persisted independently of a user shell, so they
