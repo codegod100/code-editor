@@ -20,8 +20,15 @@
   <script src="flutter_bootstrap.js" async></script>
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('service-worker.js');
+      // Flutter's bootstrap owns the service-worker registration.  This only
+      // removes the retired hand-written worker, which cached authentication
+      // pages under asset URLs and competed with Flutter's generated worker.
+      navigator.serviceWorker.getRegistrations().then((registrations) => {
+        for (const registration of registrations) {
+          if (new URL(registration.active?.scriptURL ?? registration.waiting?.scriptURL ?? registration.installing?.scriptURL ?? '', location.href).pathname.endsWith('/service-worker.js')) {
+            registration.unregister();
+          }
+        }
       });
     }
   </script>
