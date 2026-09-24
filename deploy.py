@@ -8,6 +8,7 @@ uncommitted files and an outdated checkout are never released.
 import hashlib
 import io
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -17,6 +18,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent
 ORIGIN_DEPLOY_ENV = "CODE_EDITOR_DEPLOYING_ORIGIN_MAIN"
+RELEASE_VERSION_ENV = "CODE_EDITOR_RELEASE_VERSION"
 
 # Modal currently can report a zero CLI exit status even when an image builder
 # fails. Keep these tied to its emitted builder diagnostics so the launcher
@@ -71,7 +73,10 @@ def deploy_origin_main() -> int:
             )
             return 1
 
-        environment = os.environ | {ORIGIN_DEPLOY_ENV: "1"}
+        environment = os.environ | {
+            ORIGIN_DEPLOY_ENV: "1",
+            RELEASE_VERSION_ENV: revision,
+        }
         print(f"Deploying origin/main at {revision}")
         try:
             result = subprocess.run(
@@ -107,6 +112,14 @@ if __name__ == "__main__" and os.environ.get(ORIGIN_DEPLOY_ENV) != "1":
 import modal
 
 
+release_version = os.environ.get(RELEASE_VERSION_ENV)
+if not release_version or not re.fullmatch(r"[0-9a-f]{40}", release_version):
+    raise RuntimeError(
+        f"{RELEASE_VERSION_ENV} must contain a 40-character Git revision being deployed. "
+        "Use python3 deploy.py so the release can be identified in the editor."
+    )
+
+
 app = modal.App("cloud-code-editor")
 projects = modal.Volume.from_name(
     "cloud-code-editor-projects", create_if_missing=True, version=2
@@ -129,6 +142,7 @@ image = (
     .env(
         {
             "APP_URL": "https://codegod100--cloud-code-editor-serve.modal.run",
+            "APP_RELEASE": release_version,
             "CODEX_HOME": "/workspace/.codex",
         }
     )
@@ -139,7 +153,7 @@ image = (
         "npm --prefix /app/freeq-handoff install --omit=dev",
         "npm ci",
         "npm run build:tree-sitter",
-        "flutter build web --release --no-wasm-dry-run",
+        "flutter build web --release --no-wasm-dry-run --dart-define=APP_RELEASE=$APP_RELEASE",
     )
 )
 

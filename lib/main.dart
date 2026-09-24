@@ -7,6 +7,8 @@ import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+const _deployedVersion = String.fromEnvironment('APP_RELEASE');
+
 void main() => runApp(const AgentWorkspaceApp());
 
 class AgentWorkspaceApp extends StatelessWidget {
@@ -1926,6 +1928,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ],
     ),
     actions: [
+      Tooltip(
+        message: _deployedVersion,
+        child: Chip(
+          avatar: const Icon(Icons.deployed_code_outlined, size: 16),
+          label: Text('Release ${_deployedVersion.substring(0, 12)}'),
+        ),
+      ),
       TextButton.icon(
         onPressed: _project == null ? null : _openTerminal,
         icon: const Icon(Icons.terminal),
