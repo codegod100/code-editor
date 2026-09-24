@@ -326,6 +326,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _saving = false;
   bool _agentBusy = false;
   bool _agentStopping = false;
+  bool _showCompletedHandoffs = false;
   List<String> _agentActivity = const [];
   String _streamedResponse = '';
   bool _codexConnected = false;
@@ -577,10 +578,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     _freeqPoller?.cancel();
     if (_project == null ||
         !_freeqHandoffs.any(
-          (item) =>
-              !{'complete', 'fail', 'decline', 'timeout'}.contains(
-                item['status'],
-              ),
+          (item) => !{
+            'complete',
+            'fail',
+            'decline',
+            'timeout',
+          }.contains(item['status']),
         ))
       return;
     _freeqPoller = Timer.periodic(const Duration(seconds: 5), (_) async {
@@ -588,10 +591,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       if (project == null) return;
       final pending = _freeqHandoffs
           .where(
-            (item) =>
-                !{'complete', 'fail', 'decline', 'timeout'}.contains(
-                  item['status'],
-                ),
+            (item) => !{
+              'complete',
+              'fail',
+              'decline',
+              'timeout',
+            }.contains(item['status']),
           )
           .toList();
       for (final handoff in pending) {
@@ -611,8 +616,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 )
                 .toList();
           });
-          if ({'incorporating', 'complete', 'fail', 'decline', 'timeout'}
-              .contains(update['status'])) {
+          if ({
+            'incorporating',
+            'complete',
+            'fail',
+            'decline',
+            'timeout',
+          }.contains(update['status'])) {
             await _loadSession();
           }
         } catch (_) {
@@ -649,10 +659,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             .map((item) => FreeqBot.fromJson(item as Map<String, dynamic>))
             .where((bot) => bot.did.isNotEmpty && bot.capabilities.isNotEmpty)
             .toList();
-        capabilities = bots
-            .expand((bot) => bot.capabilities)
-            .toSet()
-            .toList()
+        capabilities = bots.expand((bot) => bot.capabilities).toSet().toList()
           ..sort();
         capability = capabilities.isEmpty ? null : capabilities.first;
       } catch (error) {
@@ -787,7 +794,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           ..._messages,
           AgentMessage(
             role: 'user',
-            text: 'Open FreeQ handoff in ${channel.text.trim()}: ${task.text.trim()}',
+            text:
+                'Open FreeQ handoff in ${channel.text.trim()}: ${task.text.trim()}',
           ),
         ];
       });
@@ -858,77 +866,163 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     _ => const Color(0xFFE3B341),
   };
 
-  Widget _buildFreeqHandoffs() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: const BoxDecoration(
-      border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('FREEQ HANDOFFS', style: Theme.of(context).textTheme.labelSmall),
-        const SizedBox(height: 6),
-        ..._freeqHandoffs.map((handoff) {
-          final status = handoff['status']?.toString() ?? 'offered';
-          final color = _freeqStatusColor(status);
-          final title = handoff['title']?.toString() ?? 'FreeQ handoff';
-          final botName = handoff['botName']?.toString() ?? 'Open channel offer';
-          final note = handoff['note']?.toString().trim() ?? '';
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-              decoration: BoxDecoration(
-                color: const Color(0xFF161B22),
-                border: Border.all(color: const Color(0xFF30363D)),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(_freeqStatusIcon(status), size: 16, color: color),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
+  bool _isFinishedFreeqHandoff(String status) => switch (status) {
+    'complete' || 'fail' || 'decline' || 'timeout' => true,
+    _ => false,
+  };
+
+  Widget _buildFreeqHandoffs() {
+    final active = _freeqHandoffs
+        .where(
+          (handoff) => !_isFinishedFreeqHandoff(
+            handoff['status']?.toString() ?? 'offered',
+          ),
+        )
+        .toList();
+    final finished = _freeqHandoffs
+        .where(
+          (handoff) => _isFinishedFreeqHandoff(
+            handoff['status']?.toString() ?? 'offered',
+          ),
+        )
+        .toList();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('FREEQ', style: Theme.of(context).textTheme.labelSmall),
+              if (active.isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Text(
+                  '${active.length} active',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ],
+              const Spacer(),
+              if (finished.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => setState(
+                    () => _showCompletedHandoffs = !_showCompletedHandoffs,
+                  ),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                  ),
+                  icon: Icon(
+                    _showCompletedHandoffs
+                        ? Icons.expand_less
+                        : Icons.history_outlined,
+                    size: 16,
+                  ),
+                  label: Text(
+                    '${finished.length} completed',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+            ],
+          ),
+          if (active.isNotEmpty) const SizedBox(height: 6),
+          ...active.map((handoff) {
+            final status = handoff['status']?.toString() ?? 'offered';
+            final color = _freeqStatusColor(status);
+            final title = handoff['title']?.toString() ?? 'FreeQ handoff';
+            final botName =
+                handoff['botName']?.toString() ?? 'Open channel offer';
+            final note = handoff['note']?.toString().trim() ?? '';
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161B22),
+                  border: Border.all(color: const Color(0xFF30363D)),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(_freeqStatusIcon(status), size: 16, color: color),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
+                        const SizedBox(width: 8),
+                        Text(
+                          _freeqStatusLabel(status),
+                          style: TextStyle(
+                            color: color,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      status == 'offered'
+                          ? 'Open offer in ${handoff['channel'] ?? 'FreeQ'}'
+                          : 'Handled by $botName',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    if (note.isNotEmpty) ...[
+                      const SizedBox(height: 2),
                       Text(
-                        _freeqStatusLabel(status),
-                        style: TextStyle(
-                          color: color,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        note,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    status == 'offered'
-                        ? 'Open offer in ${handoff['channel'] ?? 'FreeQ'}'
-                        : 'Handled by $botName',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  if (note.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(note, style: Theme.of(context).textTheme.bodySmall),
                   ],
-                ],
+                ),
               ),
-            ),
-          );
-        }),
-      ],
-    ),
-  );
+            );
+          }),
+          if (_showCompletedHandoffs) ...[
+            const SizedBox(height: 4),
+            ...finished.map((handoff) {
+              final status = handoff['status']?.toString() ?? 'complete';
+              final color = _freeqStatusColor(status);
+              final title = handoff['title']?.toString() ?? 'FreeQ handoff';
+              final botName = handoff['botName']?.toString() ?? 'FreeQ bot';
+              return Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  children: [
+                    Icon(_freeqStatusIcon(status), size: 14, color: color),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '$title · $botName',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ],
+      ),
+    );
+  }
 
   Iterable<String> _parentDirectories(String path) sync* {
     final segments = path.split('/');
@@ -1712,7 +1806,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     final project = _project;
     if (project == null) return;
     setState(() {
-      if (_terminals.isEmpty) _terminals.add(TerminalSession(_nextTerminalId++));
+      if (_terminals.isEmpty)
+        _terminals.add(TerminalSession(_nextTerminalId++));
       _activeTerminalId = _terminals.last.id;
     });
     if (_terminals.isNotEmpty) return;
@@ -1848,7 +1943,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       if (_activeTerminalId == terminal.id) {
         _activeTerminalId = _terminals.isEmpty
             ? null
-            : _terminals[closedIndex.clamp(0, _terminals.length - 1).toInt()].id;
+            : _terminals[closedIndex.clamp(0, _terminals.length - 1).toInt()]
+                  .id;
       }
     });
     unawaited(_closeTerminal(project.name, terminal.id));
@@ -1976,160 +2072,160 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         : project.repoUrl;
 
     return AppBar(
-    titleSpacing: 16,
-    title: Row(
-      children: [
-        const Icon(Icons.auto_awesome, size: 22),
-        const SizedBox(width: 10),
-        Flexible(
-          child: Text(
-            project == null
-                ? projectLabel
-                : 'Codex Workspace — $projectLabel',
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        const SizedBox(width: 24),
-        if (_projects.isNotEmpty)
-          DropdownButtonHideUnderline(
-            child: DropdownButton<ProjectSummary>(
-              value: _project,
-              hint: const Text('Select project'),
-              items: _projects
-                  .map(
-                    (project) => DropdownMenuItem(
-                      value: project,
-                      child: Row(
-                        children: [
-                          Icon(
-                            project.isRepo
-                                ? Icons.account_tree_outlined
-                                : Icons.folder_outlined,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(project.name),
-                          if (project.branch.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            Text(
-                              project.branch,
-                              style: Theme.of(context).textTheme.labelSmall,
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (project) {
-                if (project != null) _selectProject(project);
-              },
+      titleSpacing: 16,
+      title: Row(
+        children: [
+          const Icon(Icons.auto_awesome, size: 22),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              project == null
+                  ? projectLabel
+                  : 'Codex Workspace — $projectLabel',
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-      ],
-    ),
-    actions: [
-      Tooltip(
-        message: _deployedVersion,
-        child: Chip(
-          avatar: const Icon(Icons.code, size: 16),
-          label: Text('Release ${_deployedVersion.substring(0, 12)}'),
-        ),
-      ),
-      TextButton.icon(
-        onPressed: _project == null ? null : _openTerminal,
-        icon: const Icon(Icons.terminal),
-        label: const Text('Terminal'),
-      ),
-      TextButton.icon(
-        onPressed: _createProject,
-        icon: const Icon(Icons.add),
-        label: const Text('Project'),
-      ),
-      if (project != null)
-        PopupMenuButton<String>(
-          tooltip: 'Project actions',
-          onSelected: (value) {
-            if (value == 'rename') _renameProject();
-            if (value == 'close') _closeProject();
-          },
-          itemBuilder: (context) => const [
-            PopupMenuItem(
-              value: 'rename',
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.drive_file_rename_outline),
-                title: Text('Rename project'),
+          const SizedBox(width: 24),
+          if (_projects.isNotEmpty)
+            DropdownButtonHideUnderline(
+              child: DropdownButton<ProjectSummary>(
+                value: _project,
+                hint: const Text('Select project'),
+                items: _projects
+                    .map(
+                      (project) => DropdownMenuItem(
+                        value: project,
+                        child: Row(
+                          children: [
+                            Icon(
+                              project.isRepo
+                                  ? Icons.account_tree_outlined
+                                  : Icons.folder_outlined,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(project.name),
+                            if (project.branch.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                project.branch,
+                                style: Theme.of(context).textTheme.labelSmall,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (project) {
+                  if (project != null) _selectProject(project);
+                },
               ),
             ),
-            PopupMenuItem(
-              value: 'close',
+        ],
+      ),
+      actions: [
+        Tooltip(
+          message: _deployedVersion,
+          child: Chip(
+            avatar: const Icon(Icons.code, size: 16),
+            label: Text('Release ${_deployedVersion.substring(0, 12)}'),
+          ),
+        ),
+        TextButton.icon(
+          onPressed: _project == null ? null : _openTerminal,
+          icon: const Icon(Icons.terminal),
+          label: const Text('Terminal'),
+        ),
+        TextButton.icon(
+          onPressed: _createProject,
+          icon: const Icon(Icons.add),
+          label: const Text('Project'),
+        ),
+        if (project != null)
+          PopupMenuButton<String>(
+            tooltip: 'Project actions',
+            onSelected: (value) {
+              if (value == 'rename') _renameProject();
+              if (value == 'close') _closeProject();
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'rename',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.drive_file_rename_outline),
+                  title: Text('Rename project'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'close',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.close),
+                  title: Text('Close project'),
+                ),
+              ),
+            ],
+            icon: const Icon(Icons.more_vert),
+          ),
+        const SizedBox(width: 8),
+        Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: _codexConnected
+              ? const Chip(
+                  avatar: Icon(Icons.check_circle, size: 16),
+                  label: Text('Codex connected'),
+                )
+              : FilledButton.tonalIcon(
+                  onPressed: _connectCodex,
+                  icon: const Icon(Icons.link),
+                  label: const Text('Connect Codex'),
+                ),
+        ),
+        PopupMenuButton<String>(
+          tooltip: _userName.isEmpty ? 'AT Protocol account' : _userName,
+          onSelected: (value) {
+            if (value == 'logout') _logout();
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem<String>(
+              enabled: false,
               child: ListTile(
                 contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.close),
-                title: Text('Close project'),
+                leading: CircleAvatar(child: Text(_userInitial)),
+                title: Text(_userName),
+                subtitle: _userEmail.isEmpty ? null : Text(_userEmail),
+              ),
+            ),
+            const PopupMenuDivider(),
+            const PopupMenuItem<String>(
+              value: 'logout',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.logout),
+                title: Text('Log out'),
               ),
             ),
           ],
-          icon: const Icon(Icons.more_vert),
-        ),
-      const SizedBox(width: 8),
-      Padding(
-        padding: const EdgeInsets.only(right: 4),
-        child: _codexConnected
-            ? const Chip(
-                avatar: Icon(Icons.check_circle, size: 16),
-                label: Text('Codex connected'),
-              )
-            : FilledButton.tonalIcon(
-                onPressed: _connectCodex,
-                icon: const Icon(Icons.link),
-                label: const Text('Connect Codex'),
-              ),
-      ),
-      PopupMenuButton<String>(
-        tooltip: _userName.isEmpty ? 'AT Protocol account' : _userName,
-        onSelected: (value) {
-          if (value == 'logout') _logout();
-        },
-        itemBuilder: (context) => [
-          PopupMenuItem<String>(
-            enabled: false,
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: CircleAvatar(child: Text(_userInitial)),
-              title: Text(_userName),
-              subtitle: _userEmail.isEmpty ? null : Text(_userEmail),
-            ),
-          ),
-          const PopupMenuDivider(),
-          const PopupMenuItem<String>(
-            value: 'logout',
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.logout),
-              title: Text('Log out'),
-            ),
-          ),
-        ],
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircleAvatar(radius: 14, child: Text(_userInitial)),
-              if (_userName.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                Text(_userName),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircleAvatar(radius: 14, child: Text(_userInitial)),
+                if (_userName.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(_userName),
+                ],
+                const SizedBox(width: 4),
+                const Icon(Icons.arrow_drop_down),
               ],
-              const SizedBox(width: 4),
-              const Icon(Icons.arrow_drop_down),
-            ],
+            ),
           ),
         ),
-      ),
-    ],
-  );
+      ],
+    );
   }
 
   Widget _buildLoginBanner() => MaterialBanner(
@@ -2182,8 +2278,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildWorkspace() => LayoutBuilder(
     builder: (context, constraints) {
-      final maxTerminalHeight = (constraints.maxHeight - 180).clamp(160, 640).toDouble();
-      final terminalHeight = _terminalHeight.clamp(160, maxTerminalHeight).toDouble();
+      final maxTerminalHeight = (constraints.maxHeight - 180)
+          .clamp(160, 640)
+          .toDouble();
+      final terminalHeight = _terminalHeight
+          .clamp(160, maxTerminalHeight)
+          .toDouble();
       if (constraints.maxWidth < 900) {
         return DefaultTabController(
           length: 3,
@@ -2207,15 +2307,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       }
       return Column(
         children: [
-          Expanded(child: Row(
-            children: [
-              SizedBox(width: 250, child: _buildFiles()),
-              const VerticalDivider(width: 1),
-              Expanded(child: _buildEditor()),
-              const VerticalDivider(width: 1),
-              SizedBox(width: 390, child: _buildAgent()),
-            ],
-          )),
+          Expanded(
+            child: Row(
+              children: [
+                SizedBox(width: 250, child: _buildFiles()),
+                const VerticalDivider(width: 1),
+                Expanded(child: _buildEditor()),
+                const VerticalDivider(width: 1),
+                SizedBox(width: 390, child: _buildAgent()),
+              ],
+            ),
+          ),
           if (_terminals.isNotEmpty) ...[
             MouseRegion(
               cursor: SystemMouseCursors.resizeUpDown,
@@ -2226,10 +2328,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                       .clamp(160, maxTerminalHeight)
                       .toDouble();
                 }),
-                child: const SizedBox(
-                  height: 6,
-                  child: Divider(height: 1),
-                ),
+                child: const SizedBox(height: 6, child: Divider(height: 1)),
               ),
             ),
             SizedBox(height: terminalHeight, child: _buildTerminalPanel()),
@@ -2248,47 +2347,66 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             orElse: () => _terminals.last,
           );
     if (project == null || terminal == null) return const SizedBox.shrink();
-    return Column(children: [
-      Container(
-        height: 44,
-        padding: const EdgeInsets.only(left: 12, right: 4),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
-        ),
-        child: Row(children: [
-          Text('TERMINAL', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(width: 12),
-          Expanded(child: ListView(
-            scrollDirection: Axis.horizontal,
-            children: _terminals.map((tab) => Row(mainAxisSize: MainAxisSize.min, children: [
-              TextButton(
-                onPressed: () => setState(() => _activeTerminalId = tab.id),
-                style: TextButton.styleFrom(
-                  foregroundColor: _activeTerminalId == tab.id
-                      ? Theme.of(context).colorScheme.primary
-                      : null,
+    return Column(
+      children: [
+        Container(
+          height: 44,
+          padding: const EdgeInsets.only(left: 12, right: 4),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+          ),
+          child: Row(
+            children: [
+              Text('TERMINAL', style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: _terminals
+                      .map(
+                        (tab) => Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            TextButton(
+                              onPressed: () =>
+                                  setState(() => _activeTerminalId = tab.id),
+                              style: TextButton.styleFrom(
+                                foregroundColor: _activeTerminalId == tab.id
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                              ),
+                              child: Text(tab.label),
+                            ),
+                            IconButton(
+                              tooltip: 'Close ${tab.label}',
+                              visualDensity: VisualDensity.compact,
+                              iconSize: 16,
+                              onPressed: () => _closeTerminalTab(tab),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
+                        ),
+                      )
+                      .toList(),
                 ),
-                child: Text(tab.label),
               ),
               IconButton(
-                tooltip: 'Close ${tab.label}',
+                tooltip: 'New terminal',
                 visualDensity: VisualDensity.compact,
-                iconSize: 16,
-                onPressed: () => _closeTerminalTab(tab),
-                icon: const Icon(Icons.close),
+                onPressed: _newTerminal,
+                icon: const Icon(Icons.add),
               ),
-            ])).toList(),
-          )),
-          IconButton(
-            tooltip: 'New terminal',
-            visualDensity: VisualDensity.compact,
-            onPressed: _newTerminal,
-            icon: const Icon(Icons.add),
+            ],
           ),
-        ]),
-      ),
-      Expanded(child: GhosttyTerminal(projectName: project.name, sessionId: terminal.id)),
-    ]);
+        ),
+        Expanded(
+          child: GhosttyTerminal(
+            projectName: project.name,
+            sessionId: terminal.id,
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _panelHeader(String title, List<Widget> actions) => Container(
