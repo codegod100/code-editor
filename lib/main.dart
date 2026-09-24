@@ -1931,7 +1931,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       Tooltip(
         message: _deployedVersion,
         child: Chip(
-          avatar: const Icon(Icons.deployed_code_outlined, size: 16),
+          avatar: const Icon(Icons.code, size: 16),
           label: Text('Release ${_deployedVersion.substring(0, 12)}'),
         ),
       ),
