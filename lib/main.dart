@@ -2177,75 +2177,83 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Future<void> _resetAgent() async {
     if (_project == null) return;
     final name = TextEditingController();
-    var archiveCurrent = false;
-    final hasCurrentThread = _activeWorkThreadId != null;
-    final result = await showDialog<({String name, bool archiveCurrent})>(
+    final result = await showDialog<String>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Create another work thread'),
-          content: SizedBox(
-            width: _dialogWidth(context, 420),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: name,
-                  autofocus: true,
-                  maxLength: 100,
-                  decoration: const InputDecoration(
-                    labelText: 'Work thread name',
-                    hintText: 'Add search to the projects page',
-                  ),
-                ),
-                if (hasCurrentThread)
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: archiveCurrent,
-                    title: const Text('Archive current work thread'),
-                    subtitle: Text(
-                      _agentBusy
-                          ? 'Stop this thread before archiving it.'
-                          : 'Move its conversation to Previous work threads.',
-                    ),
-                    controlAffinity: ListTileControlAffinity.leading,
-                    onChanged: _agentBusy
-                        ? null
-                        : (value) => setDialogState(
-                            () => archiveCurrent = value ?? false,
-                          ),
-                  ),
-              ],
+      builder: (context) => AlertDialog(
+        title: const Text('Create another work thread'),
+        content: SizedBox(
+          width: _dialogWidth(context, 420),
+          child: TextField(
+            controller: name,
+            autofocus: true,
+            maxLength: 100,
+            decoration: const InputDecoration(
+              labelText: 'Work thread name',
+              hintText: 'Add search to the projects page',
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final trimmed = name.text.trim();
-                if (trimmed.isNotEmpty) {
-                  Navigator.pop(
-                    context,
-                    (name: trimmed, archiveCurrent: archiveCurrent),
-                  );
-                }
-              },
-              child: const Text('Create thread'),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final trimmed = name.text.trim();
+              if (trimmed.isNotEmpty) {
+                Navigator.pop(context, trimmed);
+              }
+            },
+            child: const Text('Create thread'),
+          ),
+        ],
       ),
     );
     name.dispose();
     if (result == null) return;
     try {
       await _request('DELETE', _projectUrl('/session'), {
-        'name': result.name,
-        'archiveCurrent': result.archiveCurrent,
+        'name': result,
       });
+      await _loadSession();
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _archiveWorkThread(AgentWorkThread thread) async {
+    if (_project == null || _runningWorkThreads.contains(thread.id)) return;
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Archive work thread?'),
+            content: Text(
+              'Move “${thread.title}” to Previous work threads?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(context, true),
+                icon: const Icon(Icons.archive_outlined),
+                label: const Text('Archive'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    try {
+      await _request(
+        'DELETE',
+        _projectUrl('/session/${Uri.encodeComponent(thread.id)}'),
+      );
+      _workThreadActivity.remove(thread.id);
+      _workThreadStreams.remove(thread.id);
       await _loadSession();
     } catch (error) {
       _showError(error);
@@ -3415,9 +3423,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               final running = _runningWorkThreads.contains(thread.id);
               return Tooltip(
                 message: thread.title,
-                child: ChoiceChip(
+                child: InputChip(
                   selected: selected,
                   onSelected: (_) => _selectWorkThread(thread.id),
+                  onDeleted: running ? null : () => _archiveWorkThread(thread),
+                  deleteIcon: const Icon(Icons.archive_outlined, size: 16),
+                  deleteButtonTooltipMessage: running
+                      ? 'Stop this thread before archiving it'
+                      : 'Archive ${thread.title}',
                   avatar: running
                       ? const SizedBox.square(
                           dimension: 12,
