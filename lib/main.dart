@@ -2914,7 +2914,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 const SizedBox(width: 8),
                 IconButton(
                   tooltip: 'Create a pull request after pushing this branch',
-                  semanticLabel: 'Create pull request',
                   onPressed:
                       _gitBusy ||
                           !status.hasRemote ||
@@ -2927,7 +2926,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 ),
                 IconButton(
                   tooltip: 'Enable auto-merge for this branch\'s pull request',
-                  semanticLabel: 'Enable pull request auto-merge',
                   onPressed:
                       _gitBusy ||
                           !status.hasRemote ||
