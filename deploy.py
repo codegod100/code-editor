@@ -820,7 +820,20 @@ def serve():
             )
             if add.returncode:
                 raise HTTPException(400, git_error(add, "could not stage changes"))
-            commit_result = await asyncio.to_thread(git_result, project, "commit", "-m", message)
+            # Projects are persisted independently of a user shell, so they
+            # cannot rely on a global Git configuration being present. Use the
+            # same explicit editor identity as the initial project commit.
+            commit_result = await asyncio.to_thread(
+                git_result,
+                project,
+                "-c",
+                "user.name=Cloud Code Editor",
+                "-c",
+                "user.email=cloud-code-editor@users.noreply.github.com",
+                "commit",
+                "-m",
+                message,
+            )
             if commit_result.returncode:
                 raise HTTPException(400, git_error(commit_result, "could not create commit"))
             await commit()
