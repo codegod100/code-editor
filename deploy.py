@@ -1298,16 +1298,35 @@ def serve():
         return read_session(project_dir(name))
 
     @api.delete("/api/projects/{name}/session")
-    async def reset_session(name: str):
+    async def reset_session(name: str, request: Request):
         project = project_dir(name)
+        body = await request.json()
+        new_name = str(body.get("name", "")).strip()
+        if not new_name:
+            raise HTTPException(400, "work thread name is required")
+        if len(new_name) > 100:
+            raise HTTPException(400, "work thread name must be 100 characters or fewer")
+        archive_current = body.get("archiveCurrent", False) is True
         async with mutation_lock:
             session = read_session(project)
             now = datetime.now(timezone.utc).isoformat()
             new_id = os.urandom(8).hex()
             threads = list(session.get("threads", []))
+            if archive_current:
+                current = session_thread(session, session.get("activeThreadId"))
+                if current.get("threadId") or current.get("messages"):
+                    history = list(session.get("history", []))
+                    history.append({
+                        "name": current.get("title", "Untitled thread"),
+                        "threadId": current.get("threadId"),
+                        "messages": current.get("messages", []),
+                        "archivedAt": now,
+                    })
+                    session["history"] = history[-20:]
+                threads = [item for item in threads if item.get("id") != current.get("id")]
             threads.append({
                 "id": new_id,
-                "title": f"Work thread {len(threads) + 1}",
+                "title": new_name,
                 "threadId": None,
                 "messages": [],
                 "createdAt": now,
@@ -1330,6 +1349,11 @@ def serve():
         async with mutation_lock:
             session = read_session(project)
             thread = session_thread(session, str(body.get("threadId", "")))
+            thread_name = str(body.get("name", "")).strip()
+            if thread_name:
+                if len(thread_name) > 100:
+                    raise HTTPException(400, "work thread name must be 100 characters or fewer")
+                thread["title"] = thread_name
             session["activeThreadId"] = thread["id"]
             sync_active_thread(session)
             write_session(project, session)

@@ -72,12 +72,14 @@ class AgentMessage {
 class AgentThreadHistory {
   const AgentThreadHistory({
     required this.messages,
+    this.name,
     this.threadId,
     this.archivedAt,
   });
 
   factory AgentThreadHistory.fromJson(Map<String, dynamic> json) =>
       AgentThreadHistory(
+        name: (json['name'] ?? json['title']) as String?,
         threadId: json['threadId'] as String?,
         archivedAt: json['archivedAt'] as String?,
         messages: (json['messages'] as List<dynamic>? ?? const [])
@@ -85,11 +87,13 @@ class AgentThreadHistory {
             .toList(),
       );
 
+  final String? name;
   final String? threadId;
   final String? archivedAt;
   final List<AgentMessage> messages;
 
   String get title {
+    if (name?.trim().isNotEmpty == true) return name!.trim();
     final prompt = messages
         .where((message) => message.role == 'user')
         .firstOrNull;
@@ -2172,30 +2176,76 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _resetAgent() async {
     if (_project == null) return;
-    final confirmed =
-        await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Create another work thread?'),
-            content: const Text(
-              'The current thread keeps running and stays available. The new thread starts with an empty conversation.',
+    final name = TextEditingController();
+    var archiveCurrent = false;
+    final hasCurrentThread = _activeWorkThreadId != null;
+    final result = await showDialog<({String name, bool archiveCurrent})>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Create another work thread'),
+          content: SizedBox(
+            width: _dialogWidth(context, 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: name,
+                  autofocus: true,
+                  maxLength: 100,
+                  decoration: const InputDecoration(
+                    labelText: 'Work thread name',
+                    hintText: 'Add search to the projects page',
+                  ),
+                ),
+                if (hasCurrentThread)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: archiveCurrent,
+                    title: const Text('Archive current work thread'),
+                    subtitle: Text(
+                      _agentBusy
+                          ? 'Stop this thread before archiving it.'
+                          : 'Move its conversation to Previous work threads.',
+                    ),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    onChanged: _agentBusy
+                        ? null
+                        : (value) => setDialogState(
+                            () => archiveCurrent = value ?? false,
+                          ),
+                  ),
+              ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Create thread'),
-              ),
-            ],
           ),
-        ) ??
-        false;
-    if (!confirmed) return;
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final trimmed = name.text.trim();
+                if (trimmed.isNotEmpty) {
+                  Navigator.pop(
+                    context,
+                    (name: trimmed, archiveCurrent: archiveCurrent),
+                  );
+                }
+              },
+              child: const Text('Create thread'),
+            ),
+          ],
+        ),
+      ),
+    );
+    name.dispose();
+    if (result == null) return;
     try {
-      await _request('DELETE', _projectUrl('/session'));
+      await _request('DELETE', _projectUrl('/session'), {
+        'name': result.name,
+        'archiveCurrent': result.archiveCurrent,
+      });
       await _loadSession();
     } catch (error) {
       _showError(error);
