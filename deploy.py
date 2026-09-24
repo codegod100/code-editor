@@ -421,7 +421,16 @@ def serve():
     def git_status(project: Path) -> dict:
         if not (project / ".git").exists():
             return {"isRepo": False, "files": [], "changedCount": 0}
-        status = git_result(project, "status", "--porcelain=v1", "--branch")
+        try:
+            # Large repositories can legitimately take longer than the default
+            # command timeout while Git scans untracked files.
+            status = git_result(
+                project, "status", "--porcelain=v1", "--branch", timeout=120
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(503, "Git status timed out; try again") from exc
+        except OSError as exc:
+            raise HTTPException(500, f"could not start Git: {exc}") from exc
         if status.returncode:
             raise HTTPException(500, git_error(status, "could not read Git status"))
         lines = status.stdout.splitlines()
@@ -711,7 +720,7 @@ def serve():
 
     @api.get("/api/projects/{name}/git/status")
     async def get_git_status(name: str):
-        return git_status(project_dir(name))
+        return await asyncio.to_thread(git_status, project_dir(name))
 
     @api.get("/api/projects/{name}/git/diff")
     async def get_git_diff(name: str):
