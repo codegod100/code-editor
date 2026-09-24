@@ -135,6 +135,13 @@ validates that required value before starting a container, and uses the exact
 published digest rather than the mutable `v1` tag. After a deliberate CI image
 update, replace that variable with the newly published digest to adopt it.
 
+Pull requests are auto-merged by **Enable Pull Request Auto-Merge**. Configure
+the required repository secret `AUTO_MERGE_TOKEN` with a GitHub App installation
+token or fine-grained personal access token that can merge pull requests in this
+repository. Do not use `GITHUB_TOKEN`: GitHub intentionally suppresses
+downstream workflow runs for pushes it creates, so a merge made with that token
+will not start the deployment workflow.
+
 Use the included script to create or update the variable. It obtains the token
 from the authenticated GitHub CLI account, which must be allowed to manage
 Actions variables. From this repository checkout, it identifies the repository,

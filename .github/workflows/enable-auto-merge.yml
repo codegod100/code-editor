@@ -21,10 +21,17 @@ jobs:
     steps:
       - name: Enable auto-merge when it is not already enabled
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Merges performed with github.token do not trigger downstream
+          # push workflows, including the production deployment. This must be
+          # a fine-grained PAT or GitHub App token with access to this repo.
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "AUTO_MERGE_TOKEN is required. Configure a GitHub App token or fine-grained PAT that can merge pull requests; github.token cannot trigger deployment workflows." >&2
+            exit 1
+          fi
           state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --json autoMergeRequest --jq 'if .autoMergeRequest == null then "pending" else "enabled" end')"
           if [[ "$state" == "enabled" ]]; then
