@@ -129,7 +129,7 @@ image = (
     .env(
         {
             "APP_URL": "https://codegod100--cloud-code-editor-serve.modal.run",
-            "CODEX_HOME": "/projects/.codex",
+            "CODEX_HOME": "/workspace/.codex",
         }
     )
     .add_local_dir(".", remote_path="/app", copy=True)
@@ -145,7 +145,7 @@ image = (
 @app.function(
     image=image,
     secrets=[session_secret],
-    volumes={"/projects": projects},
+    volumes={"/workspace": projects},
     timeout=60 * 60,
     max_containers=1,
 )
@@ -171,7 +171,7 @@ def serve():
     from starlette.middleware.sessions import SessionMiddleware
 
     api = FastAPI(title="Cloud Code Editor", docs_url=None, redoc_url=None)
-    root = Path("/projects")
+    root = Path("/workspace")
     root.mkdir(parents=True, exist_ok=True)
     (root / ".codex").mkdir(parents=True, exist_ok=True)
     project_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -216,7 +216,7 @@ def serve():
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=os.environ | {"ATPROTO_OAUTH_ROOT": "/projects/.atproto-oauth"},
+            env=os.environ | {"ATPROTO_OAUTH_ROOT": "/workspace/.atproto-oauth"},
         )
         process.stdin.write(json.dumps(payload).encode())
         await process.stdin.drain()
@@ -807,7 +807,7 @@ def serve():
             env=os.environ | {
                 "FREEQ_OWNER_DID": owner_did,
                 "FREEQ_BOT_NICK": bot_nick,
-                "FREEQ_BOT_ROOT": f"/projects/.freeq-bots/{bot_suffix}",
+                "FREEQ_BOT_ROOT": f"/workspace/.freeq-bots/{bot_suffix}",
             },
         )
         process.stdin.write(payload.encode())
