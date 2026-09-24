@@ -1299,8 +1299,7 @@ def serve():
     async def get_session(name: str):
         return read_session(project_dir(name))
 
-    @api.delete("/api/projects/{name}/session")
-    async def reset_session(name: str, request: Request):
+    async def create_session_thread(name: str, request: Request):
         project = project_dir(name)
         body = await request.json()
         new_name = str(body.get("name", "")).strip()
@@ -1330,6 +1329,21 @@ def serve():
             write_session(project, session)
             await commit()
         return session
+
+    @api.post("/api/projects/{name}/session/threads")
+    async def post_session_thread(name: str, request: Request):
+        """Create a work thread inside an existing project.
+
+        Work threads are conversation/session records, not projects or Git
+        worktrees. Keeping this as a nested project resource prevents clients
+        from treating a new thread as another entry in the project picker.
+        """
+        return await create_session_thread(name, request)
+
+    @api.delete("/api/projects/{name}/session")
+    async def reset_session(name: str, request: Request):
+        """Backward-compatible alias for clients using the old reset route."""
+        return await create_session_thread(name, request)
 
     @api.delete("/api/projects/{name}/session/{thread_id}")
     async def archive_session_thread(name: str, thread_id: str):

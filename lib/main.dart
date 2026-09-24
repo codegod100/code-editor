@@ -2237,7 +2237,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
-  Future<void> _resetAgent() async {
+  Future<void> _createWorkThread() async {
     if (_project == null) return;
     final name = TextEditingController();
     final result = await showDialog<String>(
@@ -2276,7 +2276,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     name.dispose();
     if (result == null) return;
     try {
-      await _request('DELETE', _projectUrl('/session'), {
+      await _request('POST', _projectUrl('/session/threads'), {
         'name': result,
       });
       await _loadSession();
@@ -3352,7 +3352,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           ),
         IconButton(
           tooltip: 'New thread',
-          onPressed: _resetAgent,
+          onPressed: _createWorkThread,
           icon: const Icon(Icons.add_comment_outlined),
         ),
         PopupMenuButton<String>(
@@ -3441,7 +3441,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       IconButton(
         tooltip: 'New thread',
         visualDensity: VisualDensity.compact,
-        onPressed: _resetAgent,
+        onPressed: _createWorkThread,
         icon: const Icon(Icons.add_comment_outlined, size: 18),
       ),
       IconButton(
@@ -3560,7 +3560,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         IconButton(
           tooltip: 'New parallel work thread',
           visualDensity: VisualDensity.compact,
-          onPressed: _resetAgent,
+          onPressed: _createWorkThread,
           icon: const Icon(Icons.add, size: 18),
         ),
       ],
