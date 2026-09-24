@@ -41,6 +41,8 @@ jobs:
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: main
+      CODE_EDITOR_APP_URL: https://codegod100--cloud-code-editor-serve.modal.run
       # Deploy the revision checked out by this workflow. The local launcher
       # normally fetches origin/main before deploying; CI has already checked
       # out the merge commit that triggered this run.
@@ -52,4 +54,51 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Deploy to Modal
-        run: modal deploy deploy.py
+        run: modal deploy --env main --tag "$GITHUB_SHA" deploy.py
+
+      - name: Verify Modal deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            app_state="$(
+              modal app list --env main --json | python -c '
+          import json
+          import sys
+
+          apps = json.load(sys.stdin)
+          matches = [
+              app for app in apps
+              if app.get("description") == "cloud-code-editor"
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  f"expected exactly one cloud-code-editor app, found {len(matches)}"
+              )
+          print(matches[0].get("state", ""))
+          '
+            )"
+            if [[ "$app_state" == "deployed" ]]; then
+              echo "Modal API verified cloud-code-editor is deployed."
+              health="$(curl --fail --silent --show-error --max-time 60 "$CODE_EDITOR_APP_URL/health")"
+              python -c '
+          import json
+          import os
+          import sys
+
+          health = json.loads(sys.argv[1])
+          expected_release = os.environ["GITHUB_SHA"]
+          if health != {"status": "ok", "release": expected_release}:
+              raise SystemExit(
+                  f"unexpected health response: {health!r}; "
+                  f"expected release {expected_release!r}"
+              )
+          ' "$health"
+              echo "Health endpoint verified deployed release $GITHUB_SHA."
+              exit 0
+            fi
+            echo "Modal API reports cloud-code-editor state: $app_state (attempt $attempt/30)"
+            sleep 10
+          done
+          echo "Modal API did not report cloud-code-editor as deployed within 5 minutes." >&2
+          exit 1
