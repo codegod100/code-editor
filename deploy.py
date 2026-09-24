@@ -135,7 +135,7 @@ image = (
     .add_local_dir(".", remote_path="/app", copy=True)
     .workdir("/app")
     .run_commands(
-        "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs",
+        "curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && apt-get install -y nodejs",
         "npm --prefix /app/freeq-handoff install --omit=dev",
         "npm ci",
         "npm run build:tree-sitter",
