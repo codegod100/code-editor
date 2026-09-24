@@ -18,6 +18,7 @@ jobs:
       # normally fetches origin/main before deploying; CI has already checked
       # out the merge commit that triggered this run.
       CODE_EDITOR_DEPLOYING_ORIGIN_MAIN: "1"
+      CODE_EDITOR_RELEASE_VERSION: ${{ github.sha }}
 
     steps:
       - name: Check out merged revision
