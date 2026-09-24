@@ -19,14 +19,14 @@ The Flutter UI and FastAPI backend deploy together as one Modal application.
 ## Storage
 
 All mutable state is on the Modal v2 Volume
-`cloud-code-editor-projects`, mounted at the absolute path `/projects`:
+`cloud-code-editor-projects`, mounted at the absolute path `/workspace`:
 
-- `/projects/<project>` contains the folder or Git checkout.
-- `/projects/<project>/.code-editor/session.json` contains the project's Codex
+- `/workspace/<project>` contains the folder or Git checkout.
+- `/workspace/<project>/.code-editor/session.json` contains the project's Codex
   thread id and visible conversation history.
-- `/projects/.codex` is `CODEX_HOME` and contains the server-side Codex login
+- `/workspace/.codex` is `CODEX_HOME` and contains the server-side Codex login
   and runtime state.
-- `/projects/.freeq-bots` holds the did:key identity and delegation certificate
+- `/workspace/.freeq-bots` holds the did:key identity and delegation certificate
   used by the FreeQ handoff sender. It is mounted on the same durable Volume,
   so its identity survives restarts.
 
@@ -82,7 +82,7 @@ The editor uses the DID returned by the current AT Protocol OAuth session as
 the FreeQ sender owner. Its nick is the signed-in handle plus `-editor`, with
 characters not accepted by IRC normalized to `-` (for example,
 `nandi.uk` becomes `nandi-uk-editor`). It stores the bot key and delegation
-certificate under `/projects/.freeq-bots/<short-id>`, so no shared FreeQ DID
+certificate under `/workspace/.freeq-bots/<short-id>`, so no shared FreeQ DID
 or nick secret is needed.
 
 The sender is an ephemeral canonical `@freeq/bot-kit` session: it joins the
