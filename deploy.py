@@ -418,9 +418,16 @@ def serve():
     def git_error(result: subprocess.CompletedProcess, fallback: str) -> str:
         return result.stderr.strip() or result.stdout.strip() or fallback
 
+    def ensure_git_repository(project: Path) -> None:
+        """Initialize projects created outside the editor when they are opened."""
+        if (project / ".git").exists():
+            return
+        result = git_result(project, "init", "--initial-branch=main", timeout=120)
+        if result.returncode:
+            raise HTTPException(500, git_error(result, "could not initialize Git repository"))
+
     def git_status(project: Path) -> dict:
-        if not (project / ".git").exists():
-            return {"isRepo": False, "files": [], "changedCount": 0}
+        ensure_git_repository(project)
         try:
             # Large repositories can legitimately take longer than the default
             # command timeout while Git scans untracked files.
