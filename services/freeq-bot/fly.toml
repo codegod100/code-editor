@@ -24,7 +24,13 @@ primary_region = "ams"
   FREEQ_NICK = "freeq-bot"
   FREEQ_SERVER = "wss://irc.freeq.at/irc"
   FREEQ_CHANNELS = "#tasks"
+  FREEQ_CAPABILITY = "prime_agent"
   FREEQ_STATE_DIR = "/data"
+  MODAL_APP = "prime-agent"
+  MODAL_FUNCTION = "run_task"
+  TASK_TIMEOUT_MS = "1200000"
+  MAX_CONCURRENT_TASKS = "3"
+  PROOF_BASE_URL = "https://codegod100--prime-agent-proof.modal.run"
 
 # The bot's did:key seed. Without this volume every deploy mints a new identity
 # and the bot rejoins as a stranger with a new DID.

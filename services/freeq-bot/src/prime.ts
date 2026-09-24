@@ -7,19 +7,32 @@
  * Agent inside it, and tears it down. The bot only needs to ask and wait.
  *
  *   MODAL_TOKEN_ID / MODAL_TOKEN_SECRET   required, read by the SDK from env
- *   MODAL_APP        default 'prime-agent'
- *   MODAL_FUNCTION   default 'run_task'
- *   TASK_TIMEOUT_MS  how long to wait for an answer, default 20 minutes
- *   PROOF_BASE_URL   public proof endpoint, for the link posted with a result
+ *   MODAL_APP        required Modal app name
+ *   MODAL_FUNCTION   required function name
+ *   TASK_TIMEOUT_MS  required maximum wait for an answer
+ *   PROOF_BASE_URL   required public proof endpoint
  */
 
 import { FunctionTimeoutError, ModalClient, TimeoutError, type Function_ } from "modal";
 
-const APP = process.env.MODAL_APP ?? "prime-agent";
-const FUNCTION = process.env.MODAL_FUNCTION ?? "run_task";
-const TASK_TIMEOUT_MS = Number(process.env.TASK_TIMEOUT_MS ?? 20 * 60_000);
-const PROOF_BASE_URL =
-  process.env.PROOF_BASE_URL ?? "https://codegod100--prime-agent-proof.modal.run";
+function required(key: string): string {
+  const value = process.env[key]?.trim();
+  if (!value) throw new Error(key + " is required");
+  return value;
+}
+
+function positiveInteger(key: string): number {
+  const value = Number(required(key));
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(key + " must be a positive integer");
+  }
+  return value;
+}
+
+const APP = required("MODAL_APP");
+const FUNCTION = required("MODAL_FUNCTION");
+const TASK_TIMEOUT_MS = positiveInteger("TASK_TIMEOUT_MS");
+const PROOF_BASE_URL = required("PROOF_BASE_URL");
 
 /** Where anyone — no Modal account needed — can verify what this task ran. */
 export const proofUrl = (taskId: string) => `${PROOF_BASE_URL}/proof/${encodeURIComponent(taskId)}`;
@@ -29,7 +42,7 @@ const POLL_MS = 30_000;
 /** Sandboxes cost money and the bot is one connection: cap how many run at
  *  once rather than letting a busy channel fan out without limit. Commands and
  *  claimed offers draw on the same budget — they cost the same sandbox. */
-const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT_TASKS ?? 3);
+const MAX_CONCURRENT = positiveInteger("MAX_CONCURRENT_TASKS");
 let inFlight = 0;
 
 export const capacity = {
