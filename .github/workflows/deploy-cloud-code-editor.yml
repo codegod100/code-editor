@@ -67,15 +67,17 @@ jobs:
           import sys
 
           apps = json.load(sys.stdin)
+          # App listings include ephemeral and recently stopped apps.
           matches = [
               app for app in apps
               if app.get("description") == "cloud-code-editor"
+              and app.get("state") == "deployed"
           ]
-          if len(matches) != 1:
+          if len(matches) > 1:
               raise SystemExit(
-                  f"expected exactly one cloud-code-editor app, found {len(matches)}"
+                  f"expected at most one deployed cloud-code-editor app, found {len(matches)}"
               )
-          print(matches[0].get("state", ""))
+          print("deployed" if matches else "pending")
           '
             )"
             if [[ "$app_state" == "deployed" ]]; then
