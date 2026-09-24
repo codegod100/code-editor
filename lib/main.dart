@@ -422,6 +422,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final List<TerminalSession> _terminals = [];
   int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
   int? _activeTerminalId;
+  bool _terminalVisible = false;
   double _terminalHeight = 300;
   Timer? _highlightTimer;
   int _highlightRequest = 0;
@@ -626,6 +627,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       }
       _terminals.clear();
       _activeTerminalId = null;
+      _terminalVisible = false;
     }
     _code.clear();
     setState(() {
@@ -1909,6 +1911,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
     _terminals.clear();
     _activeTerminalId = null;
+    _terminalVisible = false;
     _code.clear();
     _forgetLastProject();
     setState(() {
@@ -2353,12 +2356,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void _openTerminal() {
     final project = _project;
     if (project == null) return;
+    final showAsDialog = MediaQuery.sizeOf(context).width < 900;
     setState(() {
-      if (_terminals.isEmpty)
+      if (_terminals.isEmpty) {
         _terminals.add(TerminalSession(_nextTerminalId++));
-      _activeTerminalId = _terminals.last.id;
+      }
+      _activeTerminalId ??= _terminals.last.id;
+      if (!showAsDialog) _terminalVisible = !_terminalVisible;
     });
-    if (!_isMobile) return;
+    if (!showAsDialog) return;
     showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -2505,6 +2511,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             : _terminals[closedIndex.clamp(0, _terminals.length - 1).toInt()]
                   .id;
       }
+      if (_terminals.isEmpty) _terminalVisible = false;
     });
     unawaited(_closeTerminal(project.name, terminal.id));
   }
@@ -2695,7 +2702,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         TextButton.icon(
           onPressed: _project == null ? null : _openTerminal,
           icon: const Icon(Icons.terminal),
-          label: const Text('Terminal'),
+          label: Text(_terminalVisible ? 'Hide terminal' : 'Terminal'),
         ),
         TextButton.icon(
           onPressed: _createProject,
@@ -2826,7 +2833,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     ),
     actions: [
       IconButton(
-        tooltip: 'Terminal',
+        tooltip: _terminalVisible ? 'Hide terminal' : 'Show terminal',
         onPressed: project == null ? null : _openTerminal,
         icon: const Icon(Icons.terminal),
       ),
@@ -2987,7 +2994,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               ],
             ),
           ),
-          if (_terminals.isNotEmpty) ...[
+          if (_terminalVisible && _terminals.isNotEmpty) ...[
             MouseRegion(
               cursor: SystemMouseCursors.resizeUpDown,
               child: GestureDetector(
