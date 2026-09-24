@@ -35,7 +35,7 @@ Every clone, editor save, session reset, login, and completed agent turn calls
 two containers cannot concurrently modify the same Volume files.
 
 Terminal shells remain live while the user returns from the terminal workspace
-to the editor: reopening the workspace reconnects to each tab's Bash process
+to the editor: reopening the workspace reconnects to each tab's Fish process
 and restores up to 1 MiB of its recent output. Closing a terminal tab ends its
 shell. Terminal sessions and scrollback are in-memory only, so a container
 restart does not preserve them.

@@ -138,7 +138,7 @@ image = (
     modal.Image.from_registry(
         "ghcr.io/cirruslabs/flutter:stable", add_python="3.12"
     )
-    .apt_install("bash", "curl", "git", "gh")
+    .apt_install("bash", "curl", "fish", "git", "gh")
     .pip_install(
         "fastapi[standard]==0.121.3",
         "itsdangerous==2.2.0",
@@ -1471,7 +1471,7 @@ def serve():
                 # shell inherits the selected project directory deterministically.
                 [
                     "bash", "--noprofile", "--norc", "-c",
-                    'cd -- "$1" || exit 1\nexec bash --noprofile --norc -i',
+                    'cd -- "$1" || exit 1\nexec fish -i',
                     "bash", str(project),
                 ],
                 cwd=str(project),
