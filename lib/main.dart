@@ -743,7 +743,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          '${bots.length} published bot${bots.length == 1 ? '' : 's'} discovered. This is an open offer: any bot in the selected channel that supports the capability may claim it.',
+                          '${bots.length} published bot${bots.length == 1 ? '' : 's'} discovered. This is an open offer: any bot in the selected channel that supports the capability may claim it. The editor publishes a clean snapshot to public AgentGit; the worker pushes its changes there for your review.',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ),
@@ -982,7 +982,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                     if (note.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(
-                        note,
+                        status == 'incorporating'
+                            ? 'Worker report (unverified): $note'
+                            : note,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall,
@@ -1000,20 +1002,31 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               final color = _freeqStatusColor(status);
               final title = handoff['title']?.toString() ?? 'FreeQ handoff';
               final botName = handoff['botName']?.toString() ?? 'FreeQ bot';
+              final exchangeUrl = handoff['exchangeUrl']?.toString() ?? '';
               return Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(_freeqStatusIcon(status), size: 14, color: color),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        '$title · $botName',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                    Row(
+                      children: [
+                        Icon(_freeqStatusIcon(status), size: 14, color: color),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '$title · $botName',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (exchangeUrl.isNotEmpty)
+                      SelectableText(
+                        'AgentGit review: $exchangeUrl',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                    ),
                   ],
                 ),
               );
