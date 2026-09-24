@@ -541,25 +541,13 @@ def serve():
         }
 
     def git_draft(project: Path, target: str) -> dict:
-        """Build editable commit or pull-request copy from local Git metadata."""
+        """Build editable pull-request copy from local Git metadata."""
         status = git_status(project)
         if not status["isRepo"]:
             raise HTTPException(400, "this project is not a Git repository")
 
-        paths = [change["path"] for change in status["files"]]
-        if target == "commit":
-            if not paths:
-                raise HTTPException(400, "there are no changes to commit")
-            if len(paths) == 1:
-                message = f"Update {paths[0]}"
-            elif len(paths) == 2:
-                message = f"Update {paths[0]} and {paths[1]}"
-            else:
-                message = f"Update {paths[0]}, {paths[1]}, and {len(paths) - 2} other files"
-            return {"message": message}
-
         if target != "pull-request":
-            raise HTTPException(400, "draft target must be commit or pull-request")
+            raise HTTPException(400, "draft target must be pull-request")
         if not status["hasRemote"]:
             raise HTTPException(400, "this branch has no origin remote")
         default_ref = git_result(
@@ -761,6 +749,58 @@ def serve():
     @api.get("/api/projects/{name}/git/draft/{target}")
     async def get_git_draft(name: str, target: str):
         return await asyncio.to_thread(git_draft, project_dir(name), target)
+
+    @api.post("/api/projects/{name}/git/commit-message")
+    async def suggest_commit_message(name: str):
+        """Have Codex inspect the working tree and choose a concise commit subject."""
+        project = project_dir(name)
+        status = await asyncio.to_thread(git_status, project)
+        if not status["isRepo"]:
+            raise HTTPException(400, "this project is not a Git repository")
+        if not status["changedCount"]:
+            raise HTTPException(400, "there are no changes to commit")
+
+        response_parts = []
+        completed_response = ""
+        try:
+            async with AsyncCodex() as codex:
+                account = await codex.account()
+                if account.account is None:
+                    raise HTTPException(401, "connect Codex before creating a commit")
+                thread = await codex.thread_start(
+                    cwd=str(project),
+                    sandbox=Sandbox.read_only,
+                    approval_mode=ApprovalMode.auto_review,
+                    developer_instructions=(
+                        "Do not edit files, change Git state, or make network requests. "
+                        "Your only job is to inspect the current uncommitted Git changes and "
+                        "return a commit message."
+                    ),
+                )
+                turn = await thread.turn(
+                    "Inspect the uncommitted changes in this repository and choose a precise, "
+                    "concise imperative Git commit subject. Return only the subject line: no "
+                    "quotes, markdown, explanation, or body."
+                )
+                async for event in turn.stream():
+                    if event.method == "item/agentMessage/delta":
+                        response_parts.append(event.payload.delta)
+                    elif event.method == "item/completed":
+                        item = getattr(event.payload.item, "root", event.payload.item)
+                        if getattr(item, "type", "") == "agentMessage" and getattr(
+                            getattr(item, "phase", None), "value", None
+                        ) == "final_answer":
+                            completed_response = item.text
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(502, f"Codex could not create a commit message: {exc}") from exc
+
+        lines = (completed_response or "".join(response_parts)).strip().splitlines()
+        message = lines[0].strip() if lines else ""
+        if not message:
+            raise HTTPException(502, "Codex returned an empty commit message")
+        return {"message": message}
 
     @api.post("/api/projects/{name}/git/commit")
     async def create_commit(name: str, request: Request):

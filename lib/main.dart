@@ -1201,16 +1201,28 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Future<void> _commitChanges() async {
     final status = _gitStatus;
     if (status == null || status.changedCount == 0 || _gitBusy) return;
-    Map<String, dynamic> draft;
+    if (!_codexConnected) {
+      _showError('Connect Codex before creating a commit.');
+      return;
+    }
+    String suggestedMessage;
     try {
-      draft = await _request('GET', _projectUrl('/git/draft/commit'));
+      setState(() => _gitBusy = true);
+      final suggestion = await _request(
+        'POST',
+        _projectUrl('/git/commit-message'),
+      );
+      suggestedMessage = suggestion['message'] as String? ?? '';
+      if (suggestedMessage.isEmpty) {
+        throw StateError('Codex returned an empty commit message');
+      }
     } catch (error) {
       _showError(error);
       return;
+    } finally {
+      if (mounted) setState(() => _gitBusy = false);
     }
-    final message = TextEditingController(
-      text: draft['message'] as String? ?? '',
-    );
+    final message = TextEditingController(text: suggestedMessage);
     final value = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1222,7 +1234,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           autofocus: true,
           decoration: const InputDecoration(
             labelText: 'Commit message',
-            hintText: 'Describe this change',
+            helperText: 'Chosen by Codex; edit if needed.',
           ),
         ),
         actions: [
