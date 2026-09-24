@@ -31,6 +31,11 @@ jobs:
           echo "image=ghcr.io/${{ github.repository_owner }}/code-editor-ci@$CI_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
   deploy:
+    # Hold the shared endpoint through verification so another release cannot
+    # replace this job's revision while its health check is still running.
+    concurrency:
+      group: cloud-code-editor-main
+      cancel-in-progress: false
     needs: resolve-ci-image
     runs-on: ubuntu-latest
     container:
