@@ -53,19 +53,17 @@ state.
 
 ## Deploy
 
-Generate an ES256 private JWK for the confidential AT Protocol OAuth client,
-then store it with an independent cookie-signing secret:
+This is a public AT Protocol OAuth client using PKCE and DPoP. Store an
+independent random cookie-signing secret for the application's browser session:
 
 ```text
 https://codegod100--cloud-code-editor-serve.modal.run/auth/callback
 ```
 
-Store it in a Modal Secret named `code-editor-atproto-oauth` together with an
-independent random cookie-signing secret:
+Store it in a Modal Secret named `code-editor-session`:
 
 ```sh
-modal secret create code-editor-atproto-oauth \
-  ATPROTO_OAUTH_PRIVATE_JWK='<ES256-private-JWK>' \
+modal secret create code-editor-session \
   SESSION_SECRET='<random-value-at-least-32-bytes>'
 ```
 

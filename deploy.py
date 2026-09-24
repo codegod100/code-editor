@@ -111,9 +111,9 @@ app = modal.App("cloud-code-editor")
 projects = modal.Volume.from_name(
     "cloud-code-editor-projects", create_if_missing=True, version=2
 )
-atproto_oauth_secret = modal.Secret.from_name(
-    "code-editor-atproto-oauth",
-    required_keys=["ATPROTO_OAUTH_PRIVATE_JWK", "SESSION_SECRET"],
+session_secret = modal.Secret.from_name(
+    "code-editor-session",
+    required_keys=["SESSION_SECRET"],
 )
 
 image = (
@@ -144,7 +144,7 @@ image = (
 
 @app.function(
     image=image,
-    secrets=[atproto_oauth_secret],
+    secrets=[session_secret],
     volumes={"/projects": projects},
     timeout=60 * 60,
     max_containers=1,
@@ -186,7 +186,7 @@ def serve():
     app_url = os.environ["APP_URL"].rstrip("/")
     public_paths = {
         "/auth/login", "/auth/authorize", "/auth/callback",
-        "/oauth-client-metadata.json", "/.well-known/jwks.json",
+        "/oauth-client-metadata.json",
     }
 
     @api.middleware("http")
@@ -274,10 +274,6 @@ def serve():
     @api.get("/oauth-client-metadata.json")
     async def oauth_client_metadata():
         return await atproto_oauth("metadata", {})
-
-    @api.get("/.well-known/jwks.json")
-    async def oauth_jwks():
-        return await atproto_oauth("jwks", {})
 
     @api.get("/api/me")
     async def current_user(request: Request):

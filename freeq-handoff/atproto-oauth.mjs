@@ -2,13 +2,12 @@
 /** Durable AT Protocol OAuth bridge for the FastAPI frontend. */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { JoseKey, Keyset, NodeOAuthClient } from '@atproto/oauth-client-node';
+import { NodeOAuthClient } from '@atproto/oauth-client-node';
 import { requestLocalLock } from '@atproto/oauth-client';
 
 const root = process.env.ATPROTO_OAUTH_ROOT;
 const appUrl = process.env.APP_URL?.replace(/\/$/, '');
-const privateJwk = process.env.ATPROTO_OAUTH_PRIVATE_JWK;
-if (!root || !appUrl || !privateJwk) throw new Error('ATPROTO_OAUTH_ROOT, APP_URL, and ATPROTO_OAUTH_PRIVATE_JWK are required');
+if (!root || !appUrl) throw new Error('ATPROTO_OAUTH_ROOT and APP_URL are required');
 
 const stateFile = join(root, 'states.json');
 const sessionFile = join(root, 'sessions.json');
@@ -33,7 +32,6 @@ function durableStore(path) {
   };
 }
 
-const key = await JoseKey.fromJWK(JSON.parse(privateJwk));
 const client = new NodeOAuthClient({
   clientMetadata: {
     client_id: `${appUrl}/oauth-client-metadata.json`,
@@ -43,12 +41,9 @@ const client = new NodeOAuthClient({
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
     scope: 'atproto',
-    token_endpoint_auth_method: 'private_key_jwt',
-    token_endpoint_auth_signing_alg: 'ES256',
-    jwks_uri: `${appUrl}/.well-known/jwks.json`,
+    token_endpoint_auth_method: 'none',
     dpop_bound_access_tokens: true,
   },
-  keyset: new Keyset([key]),
   requestLock: requestLocalLock,
   stateStore: durableStore(stateFile),
   sessionStore: durableStore(sessionFile),
@@ -64,7 +59,6 @@ const input = JSON.parse(await new Promise((resolve, reject) => {
 const command = process.argv[2];
 let result;
 if (command === 'metadata') result = client.clientMetadata;
-else if (command === 'jwks') result = { keys: [key.publicJwk] };
 else if (command === 'authorize') result = { url: String(await client.authorize(input.identity, { scope: 'atproto' })) };
 else if (command === 'callback') {
   const { session } = await client.callback(new URLSearchParams(input.params));
