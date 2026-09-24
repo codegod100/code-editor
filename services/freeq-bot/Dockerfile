@@ -2,7 +2,7 @@ FROM node:24-alpine
 
 # su-exec drops privileges in the entrypoint, after it has fixed ownership of
 # the mounted volume (Fly mounts volumes root-owned regardless of USER).
-RUN apk add --no-cache su-exec
+RUN apk add --no-cache git su-exec
 
 WORKDIR /app
 COPY package.json package-lock.json ./

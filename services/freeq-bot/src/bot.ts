@@ -11,7 +11,7 @@
 
 import { FreeqBot } from "@freeq/bot-kit";
 import { actTags } from "@freeq/sdk";
-import { handoffPrompt } from "./handoff.ts";
+import { handoffPrompt, verifyAgentGitExchange } from "./handoff.ts";
 import { capacity, proofUrl, runTask } from "./prime.ts";
 
 const CAPABILITY = required("FREEQ_CAPABILITY");
@@ -147,6 +147,14 @@ bot.on("actEvent", async (event) => {
           (error) => console.error("[worker] could not publish progress:", error),
         ),
     });
+    if (result.exitCode !== 0) {
+      throw new Error("editor task runner exited with code " + result.exitCode);
+    }
+    if (!result.text) {
+      throw new Error("editor task runner returned no completion report");
+    }
+    const agentGitUrl = event.fields["act-agentgit-url"]?.trim();
+    if (agentGitUrl) await verifyAgentGitExchange(agentGitUrl);
     await publish(event.channel, "complete", event.taskId, {
       note: Math.round(result.elapsedMs / 1000) + "s in " + result.sandboxId,
       ctx: result.text.slice(0, 400),
