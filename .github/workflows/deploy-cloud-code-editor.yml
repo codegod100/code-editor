@@ -32,6 +32,11 @@ jobs:
 
   deploy:
     needs: resolve-ci-image
+    # Keep deployment and exact-release verification together so a newer run
+    # cannot replace the live release while this run is checking its health.
+    concurrency:
+      group: cloud-code-editor-main
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.resolve-ci-image.outputs.image }}
