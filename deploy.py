@@ -138,7 +138,7 @@ image = (
     modal.Image.from_registry(
         "ghcr.io/cirruslabs/flutter:stable", add_python="3.12"
     )
-    .apt_install("bash", "curl", "fish", "git", "gh")
+    .apt_install("acl", "bash", "curl", "fish", "git", "gh", "sudo")
     .pip_install(
         "fastapi[standard]==0.121.3",
         "itsdangerous==2.2.0",
@@ -155,6 +155,8 @@ image = (
     .add_local_dir(".", remote_path="/app", copy=True)
     .workdir("/app")
     .run_commands(
+        "useradd --create-home --shell /usr/bin/fish coder",
+        "printf 'coder ALL=(ALL) NOPASSWD: ALL\\n' > /etc/sudoers.d/coder && chmod 0440 /etc/sudoers.d/coder",
         "curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && apt-get install -y nodejs",
         "npm --prefix /app/freeq-handoff install --omit=dev",
         "npm ci",
@@ -1298,8 +1300,14 @@ def serve():
         return read_session(project_dir(name))
 
     @api.delete("/api/projects/{name}/session")
-    async def reset_session(name: str):
+    async def reset_session(name: str, request: Request):
         project = project_dir(name)
+        body = await request.json()
+        new_name = str(body.get("name", "")).strip()
+        if not new_name:
+            raise HTTPException(400, "work thread name is required")
+        if len(new_name) > 100:
+            raise HTTPException(400, "work thread name must be 100 characters or fewer")
         async with mutation_lock:
             session = read_session(project)
             now = datetime.now(timezone.utc).isoformat()
@@ -1307,7 +1315,7 @@ def serve():
             threads = list(session.get("threads", []))
             threads.append({
                 "id": new_id,
-                "title": f"Work thread {len(threads) + 1}",
+                "title": new_name,
                 "threadId": None,
                 "messages": [],
                 "createdAt": now,
@@ -1324,10 +1332,16 @@ def serve():
         return session
 
     @api.post("/api/projects/{name}/workthreads")
-    async def create_work_thread(name: str):
+    async def create_work_thread(name: str, request: Request):
         project = project_dir(name)
         if not (project / ".git").exists():
             raise HTTPException(400, "work threads require a Git repository")
+        body = await request.json()
+        thread_name = str(body.get("name", "")).strip()
+        if not thread_name:
+            raise HTTPException(400, "work thread name is required")
+        if len(thread_name) > 100:
+            raise HTTPException(400, "work thread name must be 100 characters or fewer")
         async with mutation_lock:
             for _ in range(10):
                 suffix = secrets.token_hex(4)
@@ -1351,9 +1365,63 @@ def serve():
             )
             if result.returncode:
                 raise HTTPException(400, git_error(result, "could not create work thread"))
-            write_session(destination, {"threadId": None, "messages": []})
+            now = datetime.now(timezone.utc).isoformat()
+            thread_id = os.urandom(8).hex()
+            write_session(destination, {
+                "activeThreadId": thread_id,
+                "threads": [{
+                    "id": thread_id,
+                    "title": thread_name,
+                    "threadId": None,
+                    "messages": [],
+                    "createdAt": now,
+                    "updatedAt": now,
+                }],
+                "threadId": None,
+                "messages": [],
+                "handoffs": [],
+                "history": [],
+            })
             await commit()
         return {"name": workspace_name, "branch": branch, "startPoint": "HEAD"}
+
+    @api.delete("/api/projects/{name}/session/{thread_id}")
+    async def archive_session_thread(name: str, thread_id: str):
+        project = project_dir(name)
+        async with mutation_lock:
+            session = read_session(project)
+            thread = session_thread(session, thread_id)
+            if (name, thread_id) in active_turns:
+                raise HTTPException(409, "stop this work thread before archiving it")
+            now = datetime.now(timezone.utc).isoformat()
+            history = list(session.get("history", []))
+            history.append({
+                "name": thread.get("title", "Untitled thread"),
+                "threadId": thread.get("threadId"),
+                "messages": thread.get("messages", []),
+                "archivedAt": now,
+            })
+            threads = [
+                item for item in session.get("threads", [])
+                if item.get("id") != thread_id
+            ]
+            if not threads:
+                threads.append({
+                    "id": os.urandom(8).hex(),
+                    "title": "Work thread 1",
+                    "threadId": None,
+                    "messages": [],
+                    "createdAt": now,
+                    "updatedAt": now,
+                })
+            if session.get("activeThreadId") == thread_id:
+                session["activeThreadId"] = threads[0]["id"]
+            session["threads"] = threads
+            session["history"] = history[-20:]
+            sync_active_thread(session)
+            write_session(project, session)
+            await commit()
+        return session
 
     @api.patch("/api/projects/{name}/session")
     async def select_session_thread(name: str, request: Request):
@@ -1362,7 +1430,67 @@ def serve():
         async with mutation_lock:
             session = read_session(project)
             thread = session_thread(session, str(body.get("threadId", "")))
+            thread_name = str(body.get("name", "")).strip()
+            if thread_name:
+                if len(thread_name) > 100:
+                    raise HTTPException(400, "work thread name must be 100 characters or fewer")
+                thread["title"] = thread_name
             session["activeThreadId"] = thread["id"]
+            sync_active_thread(session)
+            write_session(project, session)
+            await commit()
+        return session
+
+    @api.post("/api/projects/{name}/session/reactivate")
+    async def reactivate_session_thread(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        archived_at = str(body.get("archivedAt", "")).strip()
+        if not archived_at:
+            raise HTTPException(400, "archivedAt is required")
+        async with mutation_lock:
+            session = read_session(project)
+            history = list(session.get("history", []))
+            archived_index = next(
+                (
+                    index
+                    for index, item in enumerate(history)
+                    if isinstance(item, dict)
+                    and item.get("archivedAt") == archived_at
+                ),
+                None,
+            )
+            if archived_index is None:
+                raise HTTPException(404, "archived work thread not found")
+            archived = history.pop(archived_index)
+            messages = archived.get("messages", [])
+            if not isinstance(messages, list):
+                messages = []
+            title = str(archived.get("name") or archived.get("title") or "").strip()
+            if not title:
+                first_prompt = next(
+                    (
+                        str(message.get("text", "")).strip()
+                        for message in messages
+                        if isinstance(message, dict)
+                        and message.get("role") == "user"
+                        and str(message.get("text", "")).strip()
+                    ),
+                    "Untitled thread",
+                )
+                title = " ".join(first_prompt.split())[:100]
+            now = datetime.now(timezone.utc).isoformat()
+            restored = {
+                "id": os.urandom(8).hex(),
+                "title": title,
+                "threadId": archived.get("threadId"),
+                "messages": messages,
+                "createdAt": archived.get("createdAt", now),
+                "updatedAt": now,
+            }
+            session["threads"] = [*session.get("threads", []), restored]
+            session["history"] = history
+            session["activeThreadId"] = restored["id"]
             sync_active_thread(session)
             write_session(project, session)
             await commit()
@@ -1881,6 +2009,21 @@ def serve():
         if session is None or session["process"].poll() is not None:
             if session is not None:
                 await asyncio.to_thread(stop_terminal_session, session)
+            # The API process remains root so it can manage the mounted Volume,
+            # but interactive commands should not start with unrestricted root
+            # privileges.  ACLs let the terminal account edit existing content
+            # and make that access inherit to files the API creates later.
+            subprocess.run(
+                ["setfacl", "--recursive", "--modify", "u:coder:rwX", str(project)],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "find", str(project), "-type", "d", "-exec",
+                    "setfacl", "--modify", "d:u:coder:rwx", "{}", "+",
+                ],
+                check=True,
+            )
             master_fd, slave_fd = pty.openpty()
             environment = os.environ.copy()
             environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
@@ -1891,6 +2034,7 @@ def serve():
                 # non-interactive parent shell as well as in Popen so the interactive
                 # shell inherits the selected project directory deterministically.
                 [
+                    "sudo", "--set-home", "--user", "coder", "--",
                     "bash", "--noprofile", "--norc", "-c",
                     'cd -- "$1" || exit 1\nexec fish -i',
                     "bash", str(project),

@@ -72,12 +72,14 @@ class AgentMessage {
 class AgentThreadHistory {
   const AgentThreadHistory({
     required this.messages,
+    this.name,
     this.threadId,
     this.archivedAt,
   });
 
   factory AgentThreadHistory.fromJson(Map<String, dynamic> json) =>
       AgentThreadHistory(
+        name: (json['name'] ?? json['title']) as String?,
         threadId: json['threadId'] as String?,
         archivedAt: json['archivedAt'] as String?,
         messages: (json['messages'] as List<dynamic>? ?? const [])
@@ -85,11 +87,13 @@ class AgentThreadHistory {
             .toList(),
       );
 
+  final String? name;
   final String? threadId;
   final String? archivedAt;
   final List<AgentMessage> messages;
 
   String get title {
+    if (name?.trim().isNotEmpty == true) return name!.trim();
     final prompt = messages
         .where((message) => message.role == 'user')
         .firstOrNull;
@@ -304,6 +308,7 @@ class SyntaxHighlightingController extends TextEditingController {
 
 const _terminalViewType = 'libghostty-terminal';
 bool _terminalViewRegistered = false;
+final _terminalInteractionEnabled = ValueNotifier<bool>(true);
 
 void _registerTerminalView() {
   if (_terminalViewRegistered) return;
@@ -331,17 +336,34 @@ class GhosttyTerminal extends StatefulWidget {
 }
 
 class _GhosttyTerminalState extends State<GhosttyTerminal> {
+  html.IFrameElement? _frame;
+
   @override
   void initState() {
     super.initState();
     _registerTerminalView();
+    _terminalInteractionEnabled.addListener(_updatePointerEvents);
   }
 
   void _configureFrame(int viewId) {
     final frame =
         ui_web.platformViewRegistry.getViewById(viewId) as html.IFrameElement;
+    _frame = frame;
     frame.src =
         'terminal/terminal.html?project=${Uri.encodeQueryComponent(widget.projectName)}&session=${widget.sessionId}';
+    _updatePointerEvents();
+  }
+
+  void _updatePointerEvents() {
+    _frame?.style.pointerEvents = _terminalInteractionEnabled.value
+        ? 'auto'
+        : 'none';
+  }
+
+  @override
+  void dispose() {
+    _terminalInteractionEnabled.removeListener(_updatePointerEvents);
+    super.dispose();
   }
 
   @override
@@ -358,6 +380,63 @@ class TerminalSession {
   final int id;
 
   String get label => 'Terminal $id';
+}
+
+class _CommitDialog extends StatefulWidget {
+  const _CommitDialog({
+    required this.changedCount,
+    required this.suggestedMessage,
+  });
+
+  final int changedCount;
+  final String suggestedMessage;
+
+  @override
+  State<_CommitDialog> createState() => _CommitDialogState();
+}
+
+class _CommitDialogState extends State<_CommitDialog> {
+  late final TextEditingController _message = TextEditingController(
+    text: widget.suggestedMessage,
+  );
+
+  @override
+  void dispose() {
+    _message.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(
+      'Commit ${widget.changedCount} changed file${widget.changedCount == 1 ? '' : 's'}',
+    ),
+    content: TextField(
+      controller: _message,
+      autofocus: true,
+      onChanged: (_) => setState(() {}),
+      onSubmitted: (_) => _commit(),
+      decoration: const InputDecoration(
+        labelText: 'Commit message',
+        helperText: 'Chosen by Codex; edit if needed.',
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: _message.text.trim().isEmpty ? null : _commit,
+        child: const Text('Commit'),
+      ),
+    ],
+  );
+
+  void _commit() {
+    final message = _message.text.trim();
+    if (message.isNotEmpty) Navigator.pop(context, message);
+  }
 }
 
 class WorkspaceScreen extends StatefulWidget {
@@ -418,6 +497,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final List<TerminalSession> _terminals = [];
   int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
   int? _activeTerminalId;
+  bool _terminalVisible = false;
   double _terminalHeight = 300;
   Timer? _highlightTimer;
   int _highlightRequest = 0;
@@ -622,6 +702,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       }
       _terminals.clear();
       _activeTerminalId = null;
+      _terminalVisible = false;
     }
     _code.clear();
     setState(() {
@@ -1484,34 +1565,19 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     } finally {
       if (mounted) setState(() => _gitBusy = false);
     }
-    final message = TextEditingController(text: suggestedMessage);
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          'Commit ${status.changedCount} changed file${status.changedCount == 1 ? '' : 's'}',
+    _terminalInteractionEnabled.value = false;
+    String? value;
+    try {
+      value = await showDialog<String>(
+        context: context,
+        builder: (context) => _CommitDialog(
+          changedCount: status.changedCount,
+          suggestedMessage: suggestedMessage,
         ),
-        content: TextField(
-          controller: message,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Commit message',
-            helperText: 'Chosen by Codex; edit if needed.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, message.text.trim()),
-            child: const Text('Commit'),
-          ),
-        ],
-      ),
-    );
-    message.dispose();
+      );
+    } finally {
+      _terminalInteractionEnabled.value = true;
+    }
     if (value == null || value.isEmpty) return;
     await _runGitAction('/git/commit', {'message': value}, 'Commit created');
   }
@@ -1905,6 +1971,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
     _terminals.clear();
     _activeTerminalId = null;
+    _terminalVisible = false;
     _code.clear();
     _forgetLastProject();
     setState(() {
@@ -2182,22 +2249,84 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       return;
     }
     if (_dirty && !await _confirmDiscard()) return;
+    final name = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create an isolated work thread'),
+        content: SizedBox(
+          width: _dialogWidth(context, 420),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'The new thread starts on its own codex/work-thread branch and Git worktree, then opens as a separate workspace.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: name,
+                autofocus: true,
+                maxLength: 100,
+                decoration: const InputDecoration(
+                  labelText: 'Work thread name',
+                  hintText: 'Add search to the projects page',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final trimmed = name.text.trim();
+              if (trimmed.isNotEmpty) {
+                Navigator.pop(context, trimmed);
+              }
+            },
+            child: const Text('Create worktree'),
+          ),
+        ],
+      ),
+    );
+    name.dispose();
+    if (result == null) return;
+    setState(() => _loading = true);
+    try {
+      final response = await _request('POST', _projectUrl('/workthreads'), {
+        'name': result,
+      });
+      await _refreshProjects(select: response['name'] as String);
+    } catch (error) {
+      _showError(error);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _archiveWorkThread(AgentWorkThread thread) async {
+    if (_project == null || _runningWorkThreads.contains(thread.id)) return;
     final confirmed =
         await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Create an isolated work thread?'),
-            content: const Text(
-              'The current thread stays available. The new thread starts on its own codex/work-thread branch and Git worktree, then opens as a separate workspace.',
+            title: const Text('Archive work thread?'),
+            content: Text(
+              'Move “${thread.title}” to Previous work threads?',
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
                 child: const Text('Cancel'),
               ),
-              FilledButton(
+              FilledButton.icon(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Create worktree'),
+                icon: const Icon(Icons.archive_outlined),
+                label: const Text('Archive'),
               ),
             ],
           ),
@@ -2206,8 +2335,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (!confirmed) return;
     setState(() => _loading = true);
     try {
-      final response = await _request('POST', _projectUrl('/workthreads'));
-      await _refreshProjects(select: response['name'] as String);
+      await _request(
+        'DELETE',
+        _projectUrl('/session/${Uri.encodeComponent(thread.id)}'),
+      );
+      _workThreadActivity.remove(thread.id);
+      _workThreadStreams.remove(thread.id);
+      await _loadSession();
     } catch (error) {
       _showError(error);
     } finally {
@@ -2249,7 +2383,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         '$date · ${thread.messages.length} messages',
                       ),
                       trailing: const Icon(Icons.chevron_right),
-                      onTap: () => _showHistoricalThread(thread),
+                      onTap: () async {
+                        final reactivate = await _showHistoricalThread(thread);
+                        if (!reactivate || !context.mounted) return;
+                        Navigator.pop(context);
+                        await _reactivateHistoricalThread(thread);
+                      },
                     );
                   },
                 ),
@@ -2264,56 +2403,88 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
-  Future<void> _showHistoricalThread(
+  Future<void> _reactivateHistoricalThread(
     AgentThreadHistory thread,
-  ) => showDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text(thread.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-      content: SizedBox(
-        width: _dialogWidth(context, 560),
-        height: _dialogHeight(context, 480),
-        child: ListView.separated(
-          itemCount: thread.messages.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 10),
-          itemBuilder: (context, index) {
-            final message = thread.messages[index];
-            final user = message.role == 'user';
-            return Align(
-              alignment: user ? Alignment.centerRight : Alignment.centerLeft,
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: user
-                      ? const Color(0xFF263659)
-                      : const Color(0xFF161B22),
-                  border: Border.all(color: const Color(0xFF30363D)),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: _messageText(message.text),
-              ),
-            );
-          },
+  ) async {
+    if (_project == null || thread.archivedAt == null) return;
+    try {
+      await _request('POST', _projectUrl('/session/reactivate'), {
+        'archivedAt': thread.archivedAt,
+      });
+      await _loadSession();
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<bool> _showHistoricalThread(
+    AgentThreadHistory thread,
+  ) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(
+            thread.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          content: SizedBox(
+            width: _dialogWidth(context, 560),
+            height: _dialogHeight(context, 480),
+            child: ListView.separated(
+              itemCount: thread.messages.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final message = thread.messages[index];
+                final user = message.role == 'user';
+                return Align(
+                  alignment: user
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: user
+                          ? const Color(0xFF263659)
+                          : const Color(0xFF161B22),
+                      border: Border.all(color: const Color(0xFF30363D)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: _messageText(message.text),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Back'),
+            ),
+            FilledButton.icon(
+              onPressed: thread.archivedAt == null
+                  ? null
+                  : () => Navigator.pop(context, true),
+              icon: const Icon(Icons.unarchive_outlined),
+              label: const Text('Reactivate'),
+            ),
+          ],
         ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Back'),
-        ),
-      ],
-    ),
-  );
+      ) ??
+      false;
 
   void _openTerminal() {
     final project = _project;
     if (project == null) return;
+    final showAsDialog = MediaQuery.sizeOf(context).width < 900;
     setState(() {
-      if (_terminals.isEmpty)
+      if (_terminals.isEmpty) {
         _terminals.add(TerminalSession(_nextTerminalId++));
-      _activeTerminalId = _terminals.last.id;
+      }
+      _activeTerminalId ??= _terminals.last.id;
+      if (!showAsDialog) _terminalVisible = !_terminalVisible;
     });
-    if (!_isMobile) return;
+    if (!showAsDialog) return;
     showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -2460,6 +2631,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             : _terminals[closedIndex.clamp(0, _terminals.length - 1).toInt()]
                   .id;
       }
+      if (_terminals.isEmpty) _terminalVisible = false;
     });
     unawaited(_closeTerminal(project.name, terminal.id));
   }
@@ -2650,7 +2822,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         TextButton.icon(
           onPressed: _project == null ? null : _openTerminal,
           icon: const Icon(Icons.terminal),
-          label: const Text('Terminal'),
+          label: Text(_terminalVisible ? 'Hide terminal' : 'Terminal'),
         ),
         TextButton.icon(
           onPressed: _createProject,
@@ -2781,7 +2953,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     ),
     actions: [
       IconButton(
-        tooltip: 'Terminal',
+        tooltip: _terminalVisible ? 'Hide terminal' : 'Show terminal',
         onPressed: project == null ? null : _openTerminal,
         icon: const Icon(Icons.terminal),
       ),
@@ -2942,7 +3114,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               ],
             ),
           ),
-          if (_terminals.isNotEmpty) ...[
+          if (_terminalVisible && _terminals.isNotEmpty) ...[
             MouseRegion(
               cursor: SystemMouseCursors.resizeUpDown,
               child: GestureDetector(
@@ -3378,9 +3550,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               final running = _runningWorkThreads.contains(thread.id);
               return Tooltip(
                 message: thread.title,
-                child: ChoiceChip(
+                child: InputChip(
                   selected: selected,
                   onSelected: (_) => _selectWorkThread(thread.id),
+                  onDeleted: running ? null : () => _archiveWorkThread(thread),
+                  deleteIcon: const Icon(Icons.archive_outlined, size: 16),
+                  deleteButtonTooltipMessage: running
+                      ? 'Stop this thread before archiving it'
+                      : 'Archive ${thread.title}',
                   avatar: running
                       ? const SizedBox.square(
                           dimension: 12,

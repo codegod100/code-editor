@@ -22,8 +22,8 @@ All mutable state is on the Modal v2 Volume
 `cloud-code-editor-projects`, mounted at the absolute path `/workspace`:
 
 - `/workspace/<project>` contains the folder or Git checkout.
-- `/workspace/<project>/.code-editor/session.json` contains the project's Codex
-  thread ids, active-thread selection, and visible conversation histories.
+- `/workspace/<project>/.code-editor/session.json` contains the project's named
+  Codex work threads, active-thread selection, and archived conversations.
 - `/workspace/.codex` is `CODEX_HOME` and contains the server-side Codex login
   and runtime state.
 - `/workspace/.freeq-bots` holds the did:key identity and delegation certificate
@@ -38,7 +38,8 @@ Terminal shells remain live while the user returns from the terminal workspace
 to the editor: reopening the workspace reconnects to each tab's Fish process
 and restores up to 1 MiB of its recent output. Closing a terminal tab ends its
 shell. Terminal sessions and scrollback are in-memory only, so a container
-restart does not preserve them.
+restart does not preserve them. Shells start as the unprivileged `coder` user;
+that account can use passwordless `sudo` when a command genuinely needs root.
 
 The app image is stateless. Rebuilding or restarting it does not remove project
 data. To make an offline backup:
