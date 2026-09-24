@@ -377,7 +377,7 @@ def serve():
     def read_session(project: Path) -> dict:
         path = session_path(project)
         if not path.exists():
-            return {"threadId": None, "messages": [], "handoffs": [], "history": []}
+            return {"name": "", "threadId": None, "messages": [], "handoffs": [], "history": []}
         try:
             session = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -385,6 +385,7 @@ def serve():
         if not isinstance(session, dict):
             raise HTTPException(500, "project agent session is corrupt")
         # Sessions written before thread history existed remain valid.
+        session.setdefault("name", "")
         session.setdefault("threadId", None)
         session.setdefault("messages", [])
         session.setdefault("handoffs", [])
@@ -926,19 +927,46 @@ def serve():
     async def get_session(name: str):
         return read_session(project_dir(name))
 
-    @api.delete("/api/projects/{name}/session")
-    async def reset_session(name: str):
+    @api.patch("/api/projects/{name}/session")
+    async def name_session(name: str, request: Request):
         project = project_dir(name)
+        thread_name = str((await request.json()).get("name", "")).strip()
+        if not thread_name:
+            raise HTTPException(400, "work thread name is required")
+        if len(thread_name) > 100:
+            raise HTTPException(400, "work thread name must be 100 characters or fewer")
+        async with mutation_lock:
+            session = read_session(project)
+            session["name"] = thread_name
+            write_session(project, session)
+            await commit()
+        return {"name": thread_name}
+
+    @api.delete("/api/projects/{name}/session")
+    async def reset_session(name: str, request: Request):
+        project = project_dir(name)
+        try:
+            body = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            body = {}
+        new_name = str(body.get("name", "")).strip()
+        if not new_name:
+            raise HTTPException(400, "work thread name is required")
+        if len(new_name) > 100:
+            raise HTTPException(400, "work thread name must be 100 characters or fewer")
+        archive_current = body.get("archiveCurrent", True) is not False
         async with mutation_lock:
             session = read_session(project)
             history = list(session.get("history", []))
-            if session.get("threadId") or session.get("messages"):
+            if archive_current and (session.get("threadId") or session.get("messages")):
                 history.append({
+                    "name": session.get("name", ""),
                     "threadId": session.get("threadId"),
                     "messages": session.get("messages", []),
                     "archivedAt": datetime.now(timezone.utc).isoformat(),
                 })
             write_session(project, {
+                "name": new_name,
                 "threadId": None,
                 "messages": [],
                 "handoffs": [],
@@ -1666,6 +1694,7 @@ def serve():
                         ]
                     )
                     persisted = {
+                        "name": session.get("name", ""),
                         "threadId": thread.id,
                         "messages": messages[-100:],
                         "handoffs": session.get("handoffs", []),

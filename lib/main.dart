@@ -72,12 +72,14 @@ class AgentMessage {
 class AgentThreadHistory {
   const AgentThreadHistory({
     required this.messages,
+    this.name,
     this.threadId,
     this.archivedAt,
   });
 
   factory AgentThreadHistory.fromJson(Map<String, dynamic> json) =>
       AgentThreadHistory(
+        name: json['name'] as String?,
         threadId: json['threadId'] as String?,
         archivedAt: json['archivedAt'] as String?,
         messages: (json['messages'] as List<dynamic>? ?? const [])
@@ -85,11 +87,13 @@ class AgentThreadHistory {
             .toList(),
       );
 
+  final String? name;
   final String? threadId;
   final String? archivedAt;
   final List<AgentMessage> messages;
 
   String get title {
+    if (name?.trim().isNotEmpty == true) return name!.trim();
     final prompt = messages
         .where((message) => message.role == 'user')
         .firstOrNull;
@@ -351,6 +355,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final Set<String> _expandedDirectories = {};
   List<AgentMessage> _messages = const [];
   List<AgentThreadHistory> _threadHistory = const [];
+  String _threadName = '';
   List<Map<String, dynamic>> _freeqHandoffs = const [];
   ProjectSummary? _project;
   String? _path;
@@ -579,6 +584,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _expandedDirectories.clear();
       _messages = const [];
       _threadHistory = const [];
+      _threadName = '';
       _freeqHandoffs = const [];
       _agentPanelTab = _AgentPanelTab.chat;
       _loading = true;
@@ -611,6 +617,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _messages = (response['messages'] as List<dynamic>? ?? const [])
           .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
           .toList();
+      _threadName = response['name'] as String? ?? '';
       _threadHistory = (response['history'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(AgentThreadHistory.fromJson)
@@ -1846,6 +1853,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _files = const [];
       _messages = const [];
       _threadHistory = const [];
+      _threadName = '';
       _error = null;
     });
   }
@@ -1897,6 +1905,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (_dirty) {
       _showError('Save the open file before starting an agent turn.');
       return;
+    }
+    if (_threadName.trim().isEmpty) {
+      final name = await _askForWorkThreadName();
+      if (name == null) return;
+      try {
+        await _request('PATCH', _projectUrl('/session'), {'name': name});
+        _threadName = name;
+      } catch (error) {
+        _showError(error);
+        return;
+      }
     }
     setState(() {
       _agentBusy = true;
@@ -2012,32 +2031,126 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
+  Future<String?> _askForWorkThreadName() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Name this work thread'),
+        content: SizedBox(
+          width: 420,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 100,
+            decoration: const InputDecoration(
+              labelText: 'Work thread name',
+              hintText: 'Add search to the projects page',
+            ),
+            onSubmitted: (value) {
+              final trimmed = value.trim();
+              if (trimmed.isNotEmpty) Navigator.pop(context, trimmed);
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final trimmed = controller.text.trim();
+              if (trimmed.isNotEmpty) Navigator.pop(context, trimmed);
+            },
+            child: const Text('Start thread'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return result;
+  }
+
   Future<void> _resetAgent() async {
     if (_project == null || _agentBusy) return;
-    final confirmed =
-        await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Start a new agent thread?'),
-            content: const Text(
-              'The current project files stay intact. Conversation history is cleared.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
+    final name = TextEditingController();
+    var archiveCurrent = true;
+    final hasCurrentThread = _messages.isNotEmpty;
+    final result = await showDialog<({String name, bool archiveCurrent})>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+              title: const Text('Start a new work thread'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: name,
+                      autofocus: true,
+                      maxLength: 100,
+                      decoration: const InputDecoration(
+                        labelText: 'Work thread name',
+                        hintText: 'Add search to the projects page',
+                      ),
+                      onSubmitted: (value) {
+                        final trimmed = value.trim();
+                        if (trimmed.isNotEmpty) {
+                          Navigator.pop(
+                            context,
+                            (name: trimmed, archiveCurrent: archiveCurrent),
+                          );
+                        }
+                      },
+                    ),
+                    if (hasCurrentThread)
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: archiveCurrent,
+                        title: const Text('Archive current work thread'),
+                        subtitle: const Text(
+                          'Keep its conversation in Previous work threads.',
+                        ),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        onChanged: (value) => setDialogState(
+                          () => archiveCurrent = value ?? true,
+                        ),
+                      ),
+                    const Text('Project files are not affected.'),
+                  ],
+                ),
               ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('New thread'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-    if (!confirmed) return;
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final trimmed = name.text.trim();
+                    if (trimmed.isNotEmpty) {
+                      Navigator.pop(
+                        context,
+                        (name: trimmed, archiveCurrent: archiveCurrent),
+                      );
+                    }
+                  },
+                  child: const Text('Create thread'),
+                ),
+              ],
+        ),
+      ),
+    );
+    name.dispose();
+    if (result == null) return;
     try {
-      await _request('DELETE', _projectUrl('/session'));
+      await _request('DELETE', _projectUrl('/session'), {
+        'name': result.name,
+        'archiveCurrent': result.archiveCurrent,
+      });
       await _loadSession();
     } catch (error) {
       _showError(error);
@@ -2744,8 +2857,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     ),
     child: Row(
       children: [
-        Text(title, style: Theme.of(context).textTheme.labelLarge),
-        const Spacer(),
+        Expanded(
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+        ),
         ...actions,
       ],
     ),
@@ -2867,7 +2986,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildAgent() => Column(
     children: [
-      _panelHeader('AGENT', [
+      _panelHeader(_threadName.isEmpty ? 'AGENT' : 'AGENT · $_threadName', [
         IconButton(
           tooltip: 'Hand off to a FreeQ bot',
           visualDensity: VisualDensity.compact,

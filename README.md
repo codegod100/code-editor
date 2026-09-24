@@ -22,8 +22,8 @@ All mutable state is on the Modal v2 Volume
 `cloud-code-editor-projects`, mounted at the absolute path `/workspace`:
 
 - `/workspace/<project>` contains the folder or Git checkout.
-- `/workspace/<project>/.code-editor/session.json` contains the project's Codex
-  thread id and visible conversation history.
+- `/workspace/<project>/.code-editor/session.json` contains the project's named
+  Codex work thread, visible conversation, and archived thread history.
 - `/workspace/.codex` is `CODEX_HOME` and contains the server-side Codex login
   and runtime state.
 - `/workspace/.freeq-bots` holds the did:key identity and delegation certificate
