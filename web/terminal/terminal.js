@@ -1,4 +1,4 @@
-import { init, Terminal } from './ghostty-web.js';
+import { FitAddon, init, Terminal } from './ghostty-web.js';
 
 const mount = document.getElementById('terminal');
 const status = document.getElementById('status');
@@ -18,6 +18,8 @@ const terminal = new Terminal({
   theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#7c9cff' },
 });
 terminal.open(mount);
+const fitAddon = new FitAddon();
+terminal.loadAddon(fitAddon);
 
 const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const socket = new WebSocket(
@@ -26,15 +28,15 @@ const socket = new WebSocket(
 socket.binaryType = 'arraybuffer';
 const decoder = new TextDecoder();
 
-function resize() {
+function sendResize({ cols = terminal.cols, rows = terminal.rows } = {}) {
   if (socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
+    socket.send(JSON.stringify({ type: 'resize', cols, rows }));
   }
 }
 
 socket.addEventListener('open', () => {
   status.textContent = 'Connected';
-  resize();
+  sendResize();
   terminal.focus();
 });
 socket.addEventListener('message', (event) => {
@@ -62,5 +64,7 @@ terminal.onData((data) => {
     socket.send(JSON.stringify({ type: 'input', data }));
   }
 });
-new ResizeObserver(resize).observe(mount);
+terminal.onResize(sendResize);
+fitAddon.fit();
+fitAddon.observeResize();
 addEventListener('beforeunload', () => socket.close());
