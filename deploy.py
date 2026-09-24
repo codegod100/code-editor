@@ -840,6 +840,22 @@ def serve():
         asyncio.create_task(monitor_freeq_handoff(name, project, handoff, process))
         return handoff
 
+    async def record_freeq_completion(project: Path, handoff: dict, result_text: str) -> None:
+        """Make a completed FreeQ report visible before Codex incorporates it."""
+        async with mutation_lock:
+            session = read_session(project)
+            for saved in session.get("handoffs", []):
+                if saved.get("taskId") == handoff["taskId"]:
+                    saved.update({"status": "incorporating", "note": result_text})
+            messages = list(session.get("messages", []))
+            messages.append({
+                "role": "user",
+                "text": f"FreeQ handoff completed: {handoff['title']}\n\n{result_text}",
+            })
+            session["messages"] = messages[-100:]
+            write_session(project, session)
+            await commit()
+
     async def incorporate_freeq_result(project: Path, handoff: dict, result_text: str) -> str:
         """Resume the project thread so it can inspect and apply a bot's report."""
         async with AsyncCodex() as codex:
@@ -883,10 +899,7 @@ def serve():
             async with mutation_lock:
                 session = read_session(project)
                 messages = list(session.get("messages", []))
-                messages.extend([
-                    {"role": "user", "text": f"FreeQ handoff completed: {handoff['title']}\n\n{result_text}"},
-                    {"role": "assistant", "text": response},
-                ])
+                messages.append({"role": "assistant", "text": response})
                 session["threadId"] = thread.id
                 session["messages"] = messages[-100:]
                 write_session(project, session)
@@ -922,11 +935,17 @@ def serve():
                 terminal_seen = True
                 result_text = note or ("FreeQ bot completed the handoff." if status == "complete" else f"FreeQ handoff {status}.")
                 if status == "complete":
+                    await record_freeq_completion(project, handoff, result_text)
                     while name in active_turns:
                         await asyncio.sleep(1)
                     active_turns[name] = {"freeq_incorporating": True}
                     try:
                         await incorporate_freeq_result(project, handoff, result_text)
+                    except Exception as exc:
+                        # The FreeQ result is already stored. Surface an
+                        # incorporation failure in the same editor thread.
+                        status = "fail"
+                        result_text = f"FreeQ result could not be incorporated: {exc}"
                     finally:
                         active_turns.pop(name, None)
                 async with mutation_lock:
@@ -980,13 +999,18 @@ def serve():
                 note = str(fields.get("note") or fields.get("ctx") or note)
                 claimant = event.get("actor_name") or event.get("actor_did") or claimant
         if latest in {"complete", "fail", "decline"} and handoff.get("status") != latest:
+            result_text = note or ("FreeQ bot completed the handoff." if latest == "complete" else f"FreeQ handoff {latest}.")
+            if latest == "complete" and handoff.get("status") != "incorporating":
+                await record_freeq_completion(project, handoff, result_text)
             if name in active_turns:
                 return {"taskId": task_id, "status": "waiting_to_incorporate", "note": note, "botName": claimant}
-            result_text = note or ("FreeQ bot completed the handoff." if latest == "complete" else f"FreeQ handoff {latest}.")
             if latest == "complete":
                 active_turns[name] = {"freeq_incorporating": True}
                 try:
                     await incorporate_freeq_result(project, handoff, result_text)
+                except Exception as exc:
+                    latest = "fail"
+                    result_text = f"FreeQ result could not be incorporated: {exc}"
                 finally:
                     active_turns.pop(name, None)
             async with mutation_lock:
