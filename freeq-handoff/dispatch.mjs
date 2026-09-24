@@ -2,6 +2,7 @@
 /** Connect for one open handoff's lifecycle, then exit. */
 import { FreeqBot } from '@freeq/bot-kit';
 import { actTags } from '@freeq/sdk';
+import { waitForChannelJoin } from './channel-ready.mjs';
 import { offerFields } from './offer-fields.mjs';
 
 const input = JSON.parse(await new Promise((resolve, reject) => {
@@ -53,7 +54,12 @@ bot.on('actEvent', (event) => {
 });
 
 try {
+  // start() establishes the transport, but membership is asynchronous.  Do
+  // not post before the server has acknowledged the JOIN or the act can be
+  // dropped without ever appearing in the requested channel.
+  const channelReady = waitForChannelJoin(bot, input.channel);
   await bot.start();
+  await channelReady;
   // No `to`: any capable bot in this channel can claim the offer. The offer
   // event id is the task id used by every later accept/complete/fail act.
   taskId = await bot.client.sendAct(

@@ -935,16 +935,19 @@ def serve():
         process.stdin.write(payload.encode())
         await process.stdin.drain()
         process.stdin.close()
-        asyncio.create_task(process.stderr.read())
+        stderr_output = asyncio.create_task(process.stderr.read())
         try:
             offered = json.loads((await asyncio.wait_for(process.stdout.readline(), timeout=45)).decode())
             task_id = str(offered["taskId"])
             if offered.get("type") != "offered":
                 raise ValueError("unexpected FreeQ session response")
         except (asyncio.TimeoutError, ValueError, KeyError) as exc:
-            process.kill()
+            if process.returncode is None:
+                process.kill()
             await process.wait()
-            raise HTTPException(502, "FreeQ handoff returned no task id") from exc
+            diagnostic = (await stderr_output).decode().strip()
+            detail = diagnostic or "FreeQ handoff returned no task id"
+            raise HTTPException(502, detail) from exc
         handoff = {"taskId": task_id, "server": server, "channel": channel, "capability": capability, "botName": "Open channel offer", "title": title, "status": "offered", "exchangeUrl": exchange_url, "workerBranch": "worker"}
         async with mutation_lock:
             session = read_session(project)
