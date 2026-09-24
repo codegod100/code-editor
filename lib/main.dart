@@ -330,6 +330,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _saving = false;
   bool _agentBusy = false;
   bool _agentStopping = false;
+  final Set<String> _freeqReviewBusy = <String>{};
   bool _showCompletedHandoffs = false;
   _AgentPanelTab _agentPanelTab = _AgentPanelTab.chat;
   List<String> _agentActivity = const [];
@@ -593,6 +594,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         !_freeqHandoffs.any(
           (item) => !{
             'complete',
+            'incorporated',
             'fail',
             'decline',
             'timeout',
@@ -606,6 +608,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           .where(
             (item) => !{
               'complete',
+              'incorporated',
               'fail',
               'decline',
               'timeout',
@@ -864,6 +867,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     'incorporating' => 'Adding result to this thread',
     'waiting_to_incorporate' => 'Waiting to add result',
     'complete' => 'Completed',
+    'incorporated' => 'Incorporated',
     'fail' => 'Failed',
     'decline' => 'Declined',
     'timeout' => 'Timed out',
@@ -875,6 +879,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     'claimed' || 'accepted' => Icons.person_pin_circle_outlined,
     'incorporating' || 'waiting_to_incorporate' => Icons.sync_outlined,
     'complete' => Icons.check_circle_outline,
+    'incorporated' => Icons.task_alt_outlined,
     'fail' || 'decline' || 'timeout' => Icons.error_outline,
     _ => Icons.hub_outlined,
   };
@@ -883,12 +888,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     'claimed' || 'accepted' => const Color(0xFF79C0FF),
     'incorporating' || 'waiting_to_incorporate' => const Color(0xFFD2A8FF),
     'complete' => const Color(0xFF7EE787),
+    'incorporated' => const Color(0xFF7EE787),
     'fail' || 'decline' || 'timeout' => const Color(0xFFFF7B72),
     _ => const Color(0xFFE3B341),
   };
 
   bool _isFinishedFreeqHandoff(String status) => switch (status) {
-    'complete' || 'fail' || 'decline' || 'timeout' => true,
+    'complete' || 'incorporated' || 'fail' || 'decline' || 'timeout' => true,
     _ => false,
   };
 
@@ -1020,6 +1026,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               final title = handoff['title']?.toString() ?? 'FreeQ handoff';
               final botName = handoff['botName']?.toString() ?? 'FreeQ bot';
               final exchangeUrl = handoff['exchangeUrl']?.toString() ?? '';
+              final taskId = handoff['taskId']?.toString() ?? '';
+              final canReview = status == 'complete' && taskId.isNotEmpty;
               return Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Column(
@@ -1043,6 +1051,28 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                       SelectableText(
                         'AgentGit review: $exchangeUrl',
                         style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    if (canReview)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _freeqReviewBusy.contains(taskId)
+                              ? null
+                              : () => _reviewFreeqHandoff(handoff),
+                          icon: _freeqReviewBusy.contains(taskId)
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.rate_review_outlined,
+                                  size: 16,
+                                ),
+                          label: const Text('Review & incorporate'),
+                        ),
                       ),
                   ],
                 ),
@@ -1195,6 +1225,85 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _showError(error);
     } finally {
       if (mounted) setState(() => _diffBusy = false);
+    }
+  }
+
+  Future<void> _reviewFreeqHandoff(Map<String, dynamic> handoff) async {
+    final project = _project;
+    final taskId = handoff['taskId']?.toString() ?? '';
+    if (project == null || taskId.isEmpty || _freeqReviewBusy.contains(taskId))
+      return;
+    setState(() => _freeqReviewBusy.add(taskId));
+    try {
+      final response = await _request(
+        'GET',
+        '/api/projects/${Uri.encodeComponent(project.name)}/freeq/handoffs/${Uri.encodeComponent(taskId)}/review',
+      );
+      if (!mounted) return;
+      final diff = response['diff'] as String? ?? '';
+      final truncated = response['truncated'] as bool? ?? false;
+      final incorporate = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Review worker changes'),
+          content: SizedBox(
+            width: 900,
+            height: 560,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'This compares the worker branch against your current project. Applying it creates a merge commit.',
+                ),
+                if (truncated)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text('Diff is truncated at 2 MiB.'),
+                  ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: SelectionArea(
+                    child: SingleChildScrollView(
+                      child: Text(
+                        diff.isEmpty
+                            ? 'No changes in the worker branch.'
+                            : diff,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Close'),
+            ),
+            FilledButton(
+              onPressed: diff.isEmpty
+                  ? null
+                  : () => Navigator.pop(context, true),
+              child: const Text('Incorporate changes'),
+            ),
+          ],
+        ),
+      );
+      if (incorporate != true) return;
+      await _request(
+        'POST',
+        '/api/projects/${Uri.encodeComponent(project.name)}/freeq/handoffs/${Uri.encodeComponent(taskId)}/incorporate',
+      );
+      if (!mounted) return;
+      await Future.wait([_refreshGitStatus(), _refreshTree(), _loadSession()]);
+    } catch (error) {
+      _showError(error);
+    } finally {
+      if (mounted) setState(() => _freeqReviewBusy.remove(taskId));
     }
   }
 
