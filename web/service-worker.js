@@ -1,6 +1,6 @@
 // Keep editor resources available after the first successful visit without
 // storing authenticated API responses or authentication pages in Cache Storage.
-const CACHE_NAME = 'cloud-code-editor-v2';
+const CACHE_NAME = 'cloud-code-editor-v3';
 const APP_SHELL = [
   './',
   './index.html',

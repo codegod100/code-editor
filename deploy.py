@@ -177,7 +177,7 @@ def serve():
     root.mkdir(parents=True, exist_ok=True)
     (root / ".codex").mkdir(parents=True, exist_ok=True)
     project_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-    reserved = {".codex", ".system"}
+    reserved = {".atproto-oauth", ".codex", ".freeq-bots", ".system"}
     max_text_bytes = 2 * 1024 * 1024
     mutation_lock = asyncio.Lock()
     active_turns = {}
@@ -486,7 +486,11 @@ def serve():
         root.mkdir(parents=True, exist_ok=True)
         values = []
         for path in sorted(root.iterdir(), key=lambda item: item.name.lower()):
-            if not path.is_dir() or path.name in reserved:
+            if (
+                not path.is_dir()
+                or not project_name.fullmatch(path.name)
+                or path.name in reserved
+            ):
                 continue
             is_repo = (path / ".git").exists()
             branch = run_git(path, "branch", "--show-current") if is_repo else ""
