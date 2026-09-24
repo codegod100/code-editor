@@ -2357,7 +2357,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         '$date · ${thread.messages.length} messages',
                       ),
                       trailing: const Icon(Icons.chevron_right),
-                      onTap: () => _showHistoricalThread(thread),
+                      onTap: () async {
+                        final reactivate = await _showHistoricalThread(thread);
+                        if (!reactivate || !context.mounted) return;
+                        Navigator.pop(context);
+                        await _reactivateHistoricalThread(thread);
+                      },
                     );
                   },
                 ),
@@ -2372,46 +2377,75 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
-  Future<void> _showHistoricalThread(
+  Future<void> _reactivateHistoricalThread(
     AgentThreadHistory thread,
-  ) => showDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text(thread.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-      content: SizedBox(
-        width: _dialogWidth(context, 560),
-        height: _dialogHeight(context, 480),
-        child: ListView.separated(
-          itemCount: thread.messages.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 10),
-          itemBuilder: (context, index) {
-            final message = thread.messages[index];
-            final user = message.role == 'user';
-            return Align(
-              alignment: user ? Alignment.centerRight : Alignment.centerLeft,
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: user
-                      ? const Color(0xFF263659)
-                      : const Color(0xFF161B22),
-                  border: Border.all(color: const Color(0xFF30363D)),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: _messageText(message.text),
-              ),
-            );
-          },
+  ) async {
+    if (_project == null || thread.archivedAt == null) return;
+    try {
+      await _request('POST', _projectUrl('/session/reactivate'), {
+        'archivedAt': thread.archivedAt,
+      });
+      await _loadSession();
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<bool> _showHistoricalThread(
+    AgentThreadHistory thread,
+  ) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(
+            thread.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          content: SizedBox(
+            width: _dialogWidth(context, 560),
+            height: _dialogHeight(context, 480),
+            child: ListView.separated(
+              itemCount: thread.messages.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final message = thread.messages[index];
+                final user = message.role == 'user';
+                return Align(
+                  alignment: user
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: user
+                          ? const Color(0xFF263659)
+                          : const Color(0xFF161B22),
+                      border: Border.all(color: const Color(0xFF30363D)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: _messageText(message.text),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Back'),
+            ),
+            FilledButton.icon(
+              onPressed: thread.archivedAt == null
+                  ? null
+                  : () => Navigator.pop(context, true),
+              icon: const Icon(Icons.unarchive_outlined),
+              label: const Text('Reactivate'),
+            ),
+          ],
         ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Back'),
-        ),
-      ],
-    ),
-  );
+      ) ??
+      false;
 
   void _openTerminal() {
     final project = _project;

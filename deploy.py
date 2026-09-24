@@ -1385,6 +1385,61 @@ def serve():
             await commit()
         return session
 
+    @api.post("/api/projects/{name}/session/reactivate")
+    async def reactivate_session_thread(name: str, request: Request):
+        project = project_dir(name)
+        body = await request.json()
+        archived_at = str(body.get("archivedAt", "")).strip()
+        if not archived_at:
+            raise HTTPException(400, "archivedAt is required")
+        async with mutation_lock:
+            session = read_session(project)
+            history = list(session.get("history", []))
+            archived_index = next(
+                (
+                    index
+                    for index, item in enumerate(history)
+                    if isinstance(item, dict)
+                    and item.get("archivedAt") == archived_at
+                ),
+                None,
+            )
+            if archived_index is None:
+                raise HTTPException(404, "archived work thread not found")
+            archived = history.pop(archived_index)
+            messages = archived.get("messages", [])
+            if not isinstance(messages, list):
+                messages = []
+            title = str(archived.get("name") or archived.get("title") or "").strip()
+            if not title:
+                first_prompt = next(
+                    (
+                        str(message.get("text", "")).strip()
+                        for message in messages
+                        if isinstance(message, dict)
+                        and message.get("role") == "user"
+                        and str(message.get("text", "")).strip()
+                    ),
+                    "Untitled thread",
+                )
+                title = " ".join(first_prompt.split())[:100]
+            now = datetime.now(timezone.utc).isoformat()
+            restored = {
+                "id": os.urandom(8).hex(),
+                "title": title,
+                "threadId": archived.get("threadId"),
+                "messages": messages,
+                "createdAt": archived.get("createdAt", now),
+                "updatedAt": now,
+            }
+            session["threads"] = [*session.get("threads", []), restored]
+            session["history"] = history
+            session["activeThreadId"] = restored["id"]
+            sync_active_thread(session)
+            write_session(project, session)
+            await commit()
+        return session
+
     @api.get("/api/freeq/bots")
     async def list_freeq_bots(server: str = "wss://irc.freeq.at/irc"):
         origin = freeq_server_origin(server)
