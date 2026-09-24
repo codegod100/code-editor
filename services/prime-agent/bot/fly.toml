@@ -1,0 +1,49 @@
+# Fly config for the worker half of the pair — the bot that claims offers and
+# runs them. The requester half is fly.requester.toml; see src/roles.ts for the
+# split. This is the one that holds MODAL_TOKEN_ID / MODAL_TOKEN_SECRET.
+#
+# The defining constraint: this process holds one outbound WebSocket open and
+# must never be stopped. There is deliberately no [[services]] or [http_service]
+# block — the bot listens on no port and serves no requests, so there is nothing
+# for Fly's autostop machinery to attach to. Adding one would give Fly a reason
+# to suspend the machine on idle traffic, which for this workload means dropping
+# the connection.
+#
+#   fly launch --no-deploy --copy-config
+#   fly volumes create state --size 1 --region ams
+#   fly secrets set FREEQ_OWNER_DID=did:plc:xxxx
+#   fly deploy
+
+app = "freeq-bot"
+primary_region = "ams"
+
+[build]
+
+[env]
+  FREEQ_ROLE = "worker"
+  FREEQ_NICK = "freeq-bot"
+  FREEQ_SERVER = "wss://irc.freeq.at/irc"
+  FREEQ_CHANNELS = "#tasks"
+  FREEQ_STATE_DIR = "/data"
+
+# The bot's did:key seed. Without this volume every deploy mints a new identity
+# and the bot rejoins as a stranger with a new DID.
+[[mounts]]
+  source = "state"
+  destination = "/data"
+
+# One machine, always on. Two would be two bots fighting over one nick.
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"
+
+# A dropped connection the SDK can't recover from should end the process and
+# come back as a fresh one, not sit there disconnected.
+[[restart]]
+  policy = "always"
+
+[deploy]
+  # Replace the machine outright rather than running old and new side by side —
+  # the server would see a nick collision, and the volume takes one writer.
+  strategy = "immediate"

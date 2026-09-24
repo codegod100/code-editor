@@ -1,0 +1,45 @@
+# Fly config for the requester half of the pair — the bot people type at.
+#
+# Same image as fly.toml, different role, different app, different volume, and
+# therefore a different DID. Two machines rather than one process doing both
+# jobs because the credentials differ: this one holds no Modal token and cannot
+# start a Sandbox, so the worst a compromise of it achieves is noise in a
+# channel. Deliberately no MODAL_TOKEN_* secrets here — if you set them, the
+# split stops meaning anything.
+#
+#   fly launch --no-deploy --copy-config -c fly.requester.toml
+#   fly volumes create state --size 1 --region ams -a freeq-task-desk
+#   fly secrets set FREEQ_OWNER_DID=did:plc:xxxx -a freeq-task-desk
+#   fly deploy -c fly.requester.toml
+#
+# See fly.toml for why there is no [[services]] block: the bot holds one
+# outbound WebSocket and must never be autostopped.
+
+app = "freeq-task-desk"
+primary_region = "ams"
+
+[build]
+
+[env]
+  FREEQ_ROLE = "requester"
+  FREEQ_NICK = "task-desk"
+  FREEQ_SERVER = "wss://irc.freeq.at/irc"
+  FREEQ_CHANNELS = "#tasks"
+  FREEQ_STATE_DIR = "/data"
+
+# Its own did:key seed. Sharing the worker's volume would mean sharing its
+# identity, and the network would see one DID claiming its own offers.
+[[mounts]]
+  source = "state"
+  destination = "/data"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"
+
+[[restart]]
+  policy = "always"
+
+[deploy]
+  strategy = "immediate"

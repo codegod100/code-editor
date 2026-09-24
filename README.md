@@ -99,6 +99,12 @@ freeq-bot stays connected to #tasks and only claims prime_agent offers. The
 current Fly machine mounts its durable state volume at /data, which holds its
 did:key identity; do not remove or replace that volume during deployments.
 
+The paired Modal task-runner template lives in
+[services/prime-agent](services/prime-agent). Use it as the starting point for
+new workers: it keeps paid model credentials and Sandbox lifecycle controls in
+Modal, while the Fly worker only dispatches prompts. Its default model is GLM
+5.3 Flash, with GLM 4.7 Flash used only when Workers AI returns a capacity 429.
+
 Deploy the worker from that directory so Fly uses its Dockerfile and config:
 
 ~~~sh
