@@ -10,7 +10,7 @@
     typescript: 'tree-sitter-typescript.wasm',
     tsx: 'tree-sitter-tsx.wasm',
   };
-  const assetRoot = 'assets/tree-sitter/';
+  const assetRoot = './assets/tree-sitter/';
   const languages = new Map();
   let ready;
 
