@@ -386,6 +386,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   bool get _dirty => _path != null && _code.text != _savedText;
 
+  bool get _isMobile => MediaQuery.sizeOf(context).width < 700;
+
+  double _dialogWidth(BuildContext context, double maximum) =>
+      (MediaQuery.sizeOf(context).width - 48).clamp(280, maximum).toDouble();
+
+  double _dialogHeight(BuildContext context, double maximum) =>
+      (MediaQuery.sizeOf(context).height - 180)
+          .clamp(240, maximum)
+          .toDouble();
+
   @override
   void initState() {
     super.initState();
@@ -738,7 +748,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           return AlertDialog(
             title: const Text('Hand off to a FreeQ bot'),
             content: SizedBox(
-              width: 520,
+              width: _dialogWidth(dialogContext, 520),
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -1276,8 +1286,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 : 'Current work thread diff — $branch',
           ),
           content: SizedBox(
-            width: 900,
-            height: 560,
+            width: _dialogWidth(context, 900),
+            height: _dialogHeight(context, 560),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1336,8 +1346,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         builder: (context) => AlertDialog(
           title: const Text('Review worker changes'),
           content: SizedBox(
-            width: 900,
-            height: 560,
+            width: _dialogWidth(context, 900),
+            height: _dialogHeight(context, 560),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1494,7 +1504,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Create pull request'),
         content: SizedBox(
-          width: 440,
+          width: _dialogWidth(context, 440),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1642,7 +1652,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Add project'),
         content: SizedBox(
-          width: 480,
+          width: _dialogWidth(context, 480),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1706,7 +1716,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Create isolated worktree'),
         content: SizedBox(
-          width: 460,
+          width: _dialogWidth(context, 460),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2053,7 +2063,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Previous work threads'),
         content: SizedBox(
-          width: 520,
+          width: _dialogWidth(context, 520),
           child: _threadHistory.isEmpty
               ? const Text('No previous threads for this project yet.')
               : ListView.separated(
@@ -2100,8 +2110,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     builder: (context) => AlertDialog(
       title: Text(thread.title, maxLines: 2, overflow: TextOverflow.ellipsis),
       content: SizedBox(
-        width: 560,
-        height: 480,
+        width: _dialogWidth(context, 560),
+        height: _dialogHeight(context, 480),
         child: ListView.separated(
           itemCount: thread.messages.length,
           separatorBuilder: (_, __) => const SizedBox(height: 10),
@@ -2142,7 +2152,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         _terminals.add(TerminalSession(_nextTerminalId++));
       _activeTerminalId = _terminals.last.id;
     });
-    if (_terminals.isNotEmpty) return;
+    if (!_isMobile) return;
     showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -2187,6 +2197,18 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                       visualDensity: VisualDensity.compact,
                                       iconSize: 16,
                                       onPressed: () {
+                                        if (_terminals.length == 1) {
+                                          _terminals.remove(terminal);
+                                          _activeTerminalId = null;
+                                          unawaited(
+                                            _closeTerminal(
+                                              project.name,
+                                              terminal.id,
+                                            ),
+                                          );
+                                          Navigator.pop(context);
+                                          return;
+                                        }
                                         setDialogState(() {
                                           final closedIndex = _terminals
                                               .indexOf(terminal);
@@ -2204,13 +2226,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                                     .id;
                                           }
                                         });
-                                        _closeTerminal(
-                                          project.name,
-                                          terminal.id,
+                                        unawaited(
+                                          _closeTerminal(
+                                            project.name,
+                                            terminal.id,
+                                          ),
                                         );
-                                        if (_terminals.isEmpty) {
-                                          Navigator.pop(context);
-                                        }
                                       },
                                       icon: const Icon(Icons.close),
                                     ),
@@ -2398,6 +2419,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ? project.name
         : project.repoUrl;
 
+    if (MediaQuery.sizeOf(context).width < 1100) {
+      return _buildMobileAppBar(project);
+    }
+
     return AppBar(
       titleSpacing: 16,
       title: Row(
@@ -2555,6 +2580,115 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
+  PreferredSizeWidget _buildMobileAppBar(ProjectSummary? project) => AppBar(
+    titleSpacing: 12,
+    title: Row(
+      children: [
+        const Icon(Icons.auto_awesome, size: 20),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _projects.isEmpty
+              ? Text(
+                  project?.name ?? 'Codex Workspace',
+                  overflow: TextOverflow.ellipsis,
+                )
+              : DropdownButtonHideUnderline(
+                  child: DropdownButton<ProjectSummary>(
+                    value: project,
+                    isExpanded: true,
+                    hint: const Text('Select project'),
+                    items: _projects
+                        .map(
+                          (item) => DropdownMenuItem(
+                            value: item,
+                            child: Text(
+                              item.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) _selectProject(value);
+                    },
+                  ),
+                ),
+        ),
+      ],
+    ),
+    actions: [
+      IconButton(
+        tooltip: 'Terminal',
+        onPressed: project == null ? null : _openTerminal,
+        icon: const Icon(Icons.terminal),
+      ),
+      PopupMenuButton<String>(
+        tooltip: 'Workspace actions',
+        onSelected: (value) {
+          if (value == 'create') _createProject();
+          if (value == 'connect') _connectCodex();
+          if (value == 'rename') _renameProject();
+          if (value == 'close') _closeProject();
+          if (value == 'logout') _logout();
+        },
+        itemBuilder: (context) => [
+          const PopupMenuItem(
+            value: 'create',
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.add),
+              title: Text('Add project'),
+            ),
+          ),
+          if (!_codexConnected)
+            const PopupMenuItem(
+              value: 'connect',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.link),
+                title: Text('Connect Codex'),
+              ),
+            ),
+          if (project != null) ...[
+            const PopupMenuItem(
+              value: 'rename',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.drive_file_rename_outline),
+                title: Text('Rename project'),
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'close',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.close),
+                title: Text('Close project'),
+              ),
+            ),
+          ],
+          PopupMenuItem<String>(
+            enabled: false,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: CircleAvatar(child: Text(_userInitial)),
+              title: Text(_userName.isEmpty ? 'Account' : _userName),
+              subtitle: _userEmail.isEmpty ? null : Text(_userEmail),
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'logout',
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.logout),
+              title: Text('Log out'),
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+
   Widget _buildLoginBanner() => MaterialBanner(
     leading: const Icon(Icons.login),
     content: SelectableText(
@@ -2575,7 +2709,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       constraints: const BoxConstraints(maxWidth: 520),
       child: Card(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.all(_isMobile ? 20 : 32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2618,9 +2752,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             children: [
               const TabBar(
                 tabs: [
-                  Tab(text: 'Files'),
-                  Tab(text: 'Editor'),
-                  Tab(text: 'Agent'),
+                  Tab(icon: Icon(Icons.folder_outlined), text: 'Files'),
+                  Tab(icon: Icon(Icons.edit_outlined), text: 'Editor'),
+                  Tab(icon: Icon(Icons.auto_awesome_outlined), text: 'Agent'),
                 ],
               ),
               Expanded(
@@ -2737,15 +2871,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Widget _panelHeader(String title, List<Widget> actions) => Container(
-    height: 44,
+    constraints: const BoxConstraints(minHeight: 48),
     padding: const EdgeInsets.symmetric(horizontal: 12),
     decoration: const BoxDecoration(
       border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
     ),
     child: Row(
       children: [
-        Text(title, style: Theme.of(context).textTheme.labelLarge),
-        const Spacer(),
+        Expanded(
+          child: Text(
+            title,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+        ),
         ...actions,
       ],
     ),
@@ -2775,7 +2914,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         node.path,
                       );
                       return ListTile(
-                        dense: true,
+                        dense: !_isMobile,
                         selected: !node.isDirectory && node.path == _path,
                         minLeadingWidth: 24,
                         horizontalTitleGap: 4,
@@ -2805,7 +2944,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                   _expandedDirectories.add(node.path);
                                 }
                               })
-                            : () => _openFile(node.path),
+                            : () {
+                                unawaited(_openFile(node.path));
+                                if (_isMobile) {
+                                  DefaultTabController.of(context).animateTo(1);
+                                }
+                              },
                       );
                     },
                   );
@@ -2841,7 +2985,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         child: _path == null
             ? const Center(child: Text('Select a file from the explorer'))
             : Padding(
-                padding: const EdgeInsets.all(16),
+                padding: EdgeInsets.all(_isMobile ? 10 : 16),
                 child: TextField(
                   controller: _code,
                   focusNode: _editorFocus,
@@ -2867,61 +3011,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildAgent() => Column(
     children: [
-      _panelHeader('AGENT', [
-        IconButton(
-          tooltip: 'Hand off to a FreeQ bot',
-          visualDensity: VisualDensity.compact,
-          onPressed: _agentBusy ? null : _openFreeqHandoff,
-          icon: const Icon(Icons.hub_outlined, size: 18),
-        ),
-        IconButton(
-          tooltip: 'Create isolated Git worktree',
-          visualDensity: VisualDensity.compact,
-          onPressed: _project?.isRepo == true && !_gitBusy
-              ? _createWorktree
-              : null,
-          icon: const Icon(Icons.account_tree_outlined, size: 18),
-        ),
-        IconButton(
-          tooltip: 'Refresh source control',
-          visualDensity: VisualDensity.compact,
-          onPressed: _project?.isRepo == true && !_gitBusy
-              ? _refreshGitStatus
-              : null,
-          icon: const Icon(Icons.sync_outlined, size: 18),
-        ),
-        IconButton(
-          tooltip: 'Show diff for current work thread',
-          visualDensity: VisualDensity.compact,
-          onPressed: _project?.isRepo == true && !_diffBusy
-              ? _showCurrentThreadDiff
-              : null,
-          icon: _diffBusy
-              ? const SizedBox.square(
-                  dimension: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.difference_outlined, size: 18),
-        ),
-        IconButton(
-          tooltip: _agentStopping ? 'Stopping agent' : 'Stop agent',
-          visualDensity: VisualDensity.compact,
-          onPressed: _agentBusy && !_agentStopping ? _stopAgent : null,
-          icon: const Icon(Icons.stop_circle_outlined, size: 18),
-        ),
-        IconButton(
-          tooltip: 'New thread',
-          visualDensity: VisualDensity.compact,
-          onPressed: _resetAgent,
-          icon: const Icon(Icons.add_comment_outlined, size: 18),
-        ),
-        IconButton(
-          tooltip: 'Show previous work threads',
-          visualDensity: VisualDensity.compact,
-          onPressed: _agentBusy ? null : _showThreadHistory,
-          icon: const Icon(Icons.history_outlined, size: 18),
-        ),
-      ]),
+      _panelHeader('AGENT', _buildAgentHeaderActions()),
       _buildAgentTabs(),
       Expanded(
         child: switch (_agentPanelTab) {
@@ -2935,6 +3025,118 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ),
     ],
   );
+
+  List<Widget> _buildAgentHeaderActions() {
+    if (_isMobile) {
+      return [
+        if (_agentBusy)
+          IconButton(
+            tooltip: _agentStopping ? 'Stopping agent' : 'Stop agent',
+            onPressed: _agentStopping ? null : _stopAgent,
+            icon: const Icon(Icons.stop_circle_outlined),
+          ),
+        IconButton(
+          tooltip: 'New thread',
+          onPressed: _resetAgent,
+          icon: const Icon(Icons.add_comment_outlined),
+        ),
+        PopupMenuButton<String>(
+          tooltip: 'Agent actions',
+          onSelected: (value) {
+            if (value == 'handoff') _openFreeqHandoff();
+            if (value == 'worktree') _createWorktree();
+            if (value == 'refresh') _refreshGitStatus();
+            if (value == 'diff') _showCurrentThreadDiff();
+            if (value == 'history') _showThreadHistory();
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'handoff',
+              enabled: !_agentBusy,
+              child: const Text('Hand off to FreeQ'),
+            ),
+            if (_project?.isRepo == true) ...[
+              PopupMenuItem(
+                value: 'worktree',
+                enabled: !_gitBusy,
+                child: const Text('Create worktree'),
+              ),
+              PopupMenuItem(
+                value: 'refresh',
+                enabled: !_gitBusy,
+                child: const Text('Refresh source control'),
+              ),
+              PopupMenuItem(
+                value: 'diff',
+                enabled: !_diffBusy,
+                child: const Text('Show current diff'),
+              ),
+            ],
+            PopupMenuItem(
+              value: 'history',
+              enabled: !_agentBusy,
+              child: const Text('Previous threads'),
+            ),
+          ],
+        ),
+      ];
+    }
+    return [
+      IconButton(
+        tooltip: 'Hand off to a FreeQ bot',
+        visualDensity: VisualDensity.compact,
+        onPressed: _agentBusy ? null : _openFreeqHandoff,
+        icon: const Icon(Icons.hub_outlined, size: 18),
+      ),
+      IconButton(
+        tooltip: 'Create isolated Git worktree',
+        visualDensity: VisualDensity.compact,
+        onPressed: _project?.isRepo == true && !_gitBusy
+            ? _createWorktree
+            : null,
+        icon: const Icon(Icons.account_tree_outlined, size: 18),
+      ),
+      IconButton(
+        tooltip: 'Refresh source control',
+        visualDensity: VisualDensity.compact,
+        onPressed: _project?.isRepo == true && !_gitBusy
+            ? _refreshGitStatus
+            : null,
+        icon: const Icon(Icons.sync_outlined, size: 18),
+      ),
+      IconButton(
+        tooltip: 'Show diff for current work thread',
+        visualDensity: VisualDensity.compact,
+        onPressed: _project?.isRepo == true && !_diffBusy
+            ? _showCurrentThreadDiff
+            : null,
+        icon: _diffBusy
+            ? const SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.difference_outlined, size: 18),
+      ),
+      IconButton(
+        tooltip: _agentStopping ? 'Stopping agent' : 'Stop agent',
+        visualDensity: VisualDensity.compact,
+        onPressed: _agentBusy && !_agentStopping ? _stopAgent : null,
+        icon: const Icon(Icons.stop_circle_outlined, size: 18),
+      ),
+      IconButton(
+        tooltip: 'New thread',
+        visualDensity: VisualDensity.compact,
+        onPressed: _resetAgent,
+        icon: const Icon(Icons.add_comment_outlined, size: 18),
+      ),
+      IconButton(
+        tooltip: 'Show previous work threads',
+        visualDensity: VisualDensity.compact,
+        onPressed: _agentBusy ? null : _showThreadHistory,
+        icon: const Icon(Icons.history_outlined, size: 18),
+      ),
+    ];
+  }
 
   Widget _buildAgentTabs() {
     final tabs = <(_AgentPanelTab, String, IconData)>[
@@ -3135,9 +3337,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   enabled: !_agentBusy,
                   minLines: 2,
                   maxLines: 6,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     hintText: 'Ask Codex to change this project…',
-                    helperText: 'Ctrl/Cmd+Enter to run',
+                    helperText: _isMobile ? null : 'Ctrl/Cmd+Enter to run',
                   ),
                 ),
               ),
