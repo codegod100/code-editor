@@ -1,15 +1,15 @@
 // Keep editor resources available after the first successful visit without
 // storing authenticated API responses or authentication pages in Cache Storage.
-const CACHE_NAME = 'cloud-code-editor-v1';
+const CACHE_NAME = 'cloud-code-editor-v2';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
-  './favicon.png',
-  './icons/Icon-192.png',
-  './icons/Icon-512.png',
-  './icons/Icon-maskable-192.png',
-  './icons/Icon-maskable-512.png',
+  './favicon-cloud-code-editor.png',
+  './icons/cloud-code-editor-192.png',
+  './icons/cloud-code-editor-512.png',
+  './icons/cloud-code-editor-maskable-192.png',
+  './icons/cloud-code-editor-maskable-512.png',
 ];
 
 const isAppAsset = (url) =>
