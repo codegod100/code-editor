@@ -32,6 +32,11 @@ jobs:
 
   deploy:
     needs: resolve-ci-image
+    # Hold the shared endpoint through verification so another release cannot
+    # replace this run's SHA while its health check is still waiting.
+    concurrency:
+      group: cloud-code-editor-main
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.resolve-ci-image.outputs.image }}
