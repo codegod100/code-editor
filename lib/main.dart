@@ -98,6 +98,39 @@ class AgentThreadHistory {
   }
 }
 
+class AgentWorkThread {
+  const AgentWorkThread({
+    required this.id,
+    required this.title,
+    required this.messages,
+    this.updatedAt,
+  });
+
+  factory AgentWorkThread.fromJson(Map<String, dynamic> json) => AgentWorkThread(
+    id: json['id'] as String? ?? '',
+    title: json['title'] as String? ?? 'Work thread',
+    updatedAt: json['updatedAt'] as String?,
+    messages: (json['messages'] as List<dynamic>? ?? const [])
+        .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
+        .toList(),
+  );
+
+  final String id;
+  final String title;
+  final String? updatedAt;
+  final List<AgentMessage> messages;
+
+  AgentWorkThread withMessages(
+    List<AgentMessage> value, {
+    String? newTitle,
+  }) => AgentWorkThread(
+    id: id,
+    title: newTitle ?? title,
+    messages: value,
+    updatedAt: updatedAt,
+  );
+}
+
 class FreeqBot {
   const FreeqBot({
     required this.did,
@@ -350,6 +383,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   List<String> _files = const [];
   final Set<String> _expandedDirectories = {};
   List<AgentMessage> _messages = const [];
+  List<AgentWorkThread> _workThreads = const [];
+  String? _activeWorkThreadId;
+  final Set<String> _runningWorkThreads = <String>{};
+  final Set<String> _stoppingWorkThreads = <String>{};
+  final Map<String, html.EventSource> _agentEventSources = {};
+  final Map<String, List<String>> _workThreadActivity = {};
+  final Map<String, String> _workThreadStreams = {};
   List<AgentThreadHistory> _threadHistory = const [];
   List<Map<String, dynamic>> _freeqHandoffs = const [];
   ProjectSummary? _project;
@@ -374,7 +414,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   String? _loginUrl;
   String? _loginCode;
   html.EventSource? _loginEvents;
-  html.EventSource? _agentEvents;
   Timer? _freeqPoller;
   final List<TerminalSession> _terminals = [];
   int _nextTerminalId = DateTime.now().microsecondsSinceEpoch;
@@ -561,6 +600,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Future<void> _selectProject(ProjectSummary project) async {
+    if (_project?.name != project.name && _runningWorkThreads.isNotEmpty) {
+      _showError('Stop running work threads before switching projects.');
+      return;
+    }
     if (_dirty && !await _confirmDiscard()) return;
     final previousProject = _project;
     if (previousProject != null && previousProject.name != project.name) {
@@ -578,6 +621,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _files = const [];
       _expandedDirectories.clear();
       _messages = const [];
+      _workThreads = const [];
+      _activeWorkThreadId = null;
       _threadHistory = const [];
       _freeqHandoffs = const [];
       _agentPanelTab = _AgentPanelTab.chat;
@@ -608,6 +653,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     final response = await _request('GET', _projectUrl('/session'));
     if (!mounted) return;
     setState(() {
+      _workThreads = (response['threads'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(AgentWorkThread.fromJson)
+          .toList();
+      _activeWorkThreadId = response['activeThreadId'] as String?;
       _messages = (response['messages'] as List<dynamic>? ?? const [])
           .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
           .toList();
@@ -620,6 +670,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _freeqHandoffs = (response['handoffs'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .toList();
+      _agentBusy = _runningWorkThreads.contains(_activeWorkThreadId);
+      _agentStopping = _stoppingWorkThreads.contains(_activeWorkThreadId);
+      _agentActivity = _workThreadActivity[_activeWorkThreadId] ?? const [];
+      _streamedResponse = _workThreadStreams[_activeWorkThreadId] ?? '';
     });
     _ensureFreeqPolling();
     _scrollMessages();
@@ -1830,6 +1884,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _closeProject() async {
     if (_project == null) return;
+    if (_runningWorkThreads.isNotEmpty) {
+      _showError('Stop running work threads before closing the project.');
+      return;
+    }
     if (_dirty && !await _confirmDiscard()) return;
     final project = _project!;
     for (final terminal in _terminals) {
@@ -1845,6 +1903,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _savedText = '';
       _files = const [];
       _messages = const [];
+      _workThreads = const [];
+      _activeWorkThreadId = null;
       _threadHistory = const [];
       _error = null;
     });
@@ -1886,6 +1946,40 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     });
   }
 
+  void _updateWorkThreadMessages(
+    String threadId,
+    List<AgentMessage> messages, {
+    String? title,
+  }) {
+    _workThreads = _workThreads
+        .map(
+          (thread) => thread.id == threadId
+              ? thread.withMessages(messages, newTitle: title)
+              : thread,
+        )
+        .toList();
+  }
+
+  Future<void> _selectWorkThread(String threadId) async {
+    if (_activeWorkThreadId == threadId || _project == null) return;
+    final thread = _workThreads.where((item) => item.id == threadId).firstOrNull;
+    if (thread == null) return;
+    setState(() {
+      _activeWorkThreadId = threadId;
+      _messages = thread.messages;
+      _agentBusy = _runningWorkThreads.contains(threadId);
+      _agentStopping = _stoppingWorkThreads.contains(threadId);
+      _agentActivity = _workThreadActivity[threadId] ?? const [];
+      _streamedResponse = _workThreadStreams[threadId] ?? '';
+    });
+    _scrollMessages();
+    try {
+      await _request('PATCH', _projectUrl('/session'), {'threadId': threadId});
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
   Future<void> _runAgent() async {
     if (_project == null || _agentBusy) return;
     final prompt = _agentPrompt.text.trim();
@@ -1898,18 +1992,34 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _showError('Save the open file before starting an agent turn.');
       return;
     }
+    final workThreadId = _activeWorkThreadId;
+    if (workThreadId == null) return;
     setState(() {
+      _runningWorkThreads.add(workThreadId);
       _agentBusy = true;
       _agentPrompt.clear();
       _messages = [..._messages, AgentMessage(role: 'user', text: prompt)];
       _agentActivity = const ['Starting Codex…'];
       _streamedResponse = '';
+      _workThreadActivity[workThreadId] = _agentActivity;
+      _workThreadStreams[workThreadId] = '';
+      final currentThread = _workThreads
+          .where((thread) => thread.id == workThreadId)
+          .firstOrNull;
+      _updateWorkThreadMessages(
+        workThreadId,
+        _messages,
+        title: currentThread?.title.startsWith('Work thread ') == true
+            ? (prompt.length <= 48 ? prompt : prompt.substring(0, 48))
+            : null,
+      );
       _error = null;
     });
     _scrollMessages();
     try {
       final started = await _request('POST', _projectUrl('/agent'), {
         'prompt': prompt,
+        'threadId': workThreadId,
       });
       final runId = started['runId'] as String?;
       if (runId == null || runId.isEmpty) {
@@ -1917,7 +2027,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       }
       final completed = Completer<void>();
       final source = html.EventSource('${_projectUrl('/agent/events')}/$runId');
-      _agentEvents = source;
+      _agentEventSources[workThreadId] = source;
       source.onMessage.listen((event) {
         final value = jsonDecode(event.data as String) as Map<String, dynamic>;
         final type = value['type'] as String?;
@@ -1926,34 +2036,55 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           final activity = value['text']?.toString() ?? '';
           if (activity.isNotEmpty) {
             setState(() {
-              final next = [..._agentActivity, activity];
-              _agentActivity = next.length > 12
+              final previous = _workThreadActivity[workThreadId] ?? const [];
+              final next = [...previous, activity];
+              final values = next.length > 12
                   ? next.sublist(next.length - 12)
                   : next;
+              _workThreadActivity[workThreadId] = values;
+              if (_activeWorkThreadId == workThreadId) _agentActivity = values;
             });
             _scrollMessages();
           }
         } else if (type == 'response_delta') {
-          setState(() => _streamedResponse += value['text']?.toString() ?? '');
+          setState(() {
+            final stream = (_workThreadStreams[workThreadId] ?? '') +
+                (value['text']?.toString() ?? '');
+            _workThreadStreams[workThreadId] = stream;
+            if (_activeWorkThreadId == workThreadId) _streamedResponse = stream;
+          });
           _scrollMessages();
         } else if (type == 'complete') {
           final messages = value['messages'];
           setState(() {
+            List<AgentMessage>? completedMessages;
             if (messages is List<dynamic>) {
-              _messages = messages
+              completedMessages = messages
                   .map(
                     (item) =>
                         AgentMessage.fromJson(item as Map<String, dynamic>),
                   )
                   .toList();
-            } else if (_streamedResponse.isEmpty) {
-              _messages = [
-                ..._messages,
+            } else if ((_workThreadStreams[workThreadId] ?? '').isEmpty) {
+              final existing =
+                  _workThreads
+                      .where((thread) => thread.id == workThreadId)
+                      .firstOrNull
+                      ?.messages ??
+                  const [];
+              completedMessages = [
+                ...existing,
                 AgentMessage(
                   role: 'assistant',
                   text: value['response']?.toString() ?? 'Stopped.',
                 ),
               ];
+            }
+            if (completedMessages != null) {
+              _updateWorkThreadMessages(workThreadId, completedMessages);
+              if (_activeWorkThreadId == workThreadId) {
+                _messages = completedMessages;
+              }
             }
           });
           source.close();
@@ -1975,7 +2106,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         }
       });
       await completed.future;
-      _agentEvents = null;
+      _agentEventSources.remove(workThreadId);
       if (!mounted) return;
       await _refreshTree();
       if (_path != null) await _openFile(_path!);
@@ -1984,14 +2115,19 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     } catch (error) {
       _showError(error);
     } finally {
-      _agentEvents?.close();
-      _agentEvents = null;
+      _agentEventSources.remove(workThreadId)?.close();
       if (mounted) {
         setState(() {
-          _agentBusy = false;
-          _agentStopping = false;
-          _agentActivity = const [];
-          _streamedResponse = '';
+          _runningWorkThreads.remove(workThreadId);
+          _stoppingWorkThreads.remove(workThreadId);
+          _workThreadActivity.remove(workThreadId);
+          _workThreadStreams.remove(workThreadId);
+          if (_activeWorkThreadId == workThreadId) {
+            _agentBusy = false;
+            _agentStopping = false;
+            _agentActivity = const [];
+            _streamedResponse = '';
+          }
         });
         _scrollMessages();
       }
@@ -2001,26 +2137,38 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Future<void> _stopAgent() async {
     if (_project == null || !_agentBusy || _agentStopping) return;
     setState(() {
+      if (_activeWorkThreadId != null) {
+        _stoppingWorkThreads.add(_activeWorkThreadId!);
+      }
       _agentStopping = true;
       _error = null;
     });
     try {
-      await _request('POST', _projectUrl('/agent/stop'));
+      await _request('POST', _projectUrl('/agent/stop'), {
+        'threadId': _activeWorkThreadId,
+      });
     } catch (error) {
-      if (mounted) setState(() => _agentStopping = false);
+      if (mounted) {
+        setState(() {
+          if (_activeWorkThreadId != null) {
+            _stoppingWorkThreads.remove(_activeWorkThreadId!);
+          }
+          _agentStopping = false;
+        });
+      }
       _showError(error);
     }
   }
 
   Future<void> _resetAgent() async {
-    if (_project == null || _agentBusy) return;
+    if (_project == null) return;
     final confirmed =
         await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('Start a new agent thread?'),
+            title: const Text('Create another work thread?'),
             content: const Text(
-              'The current project files stay intact. Conversation history is cleared.',
+              'The current thread keeps running and stays available. The new thread starts with an empty conversation.',
             ),
             actions: [
               TextButton(
@@ -2029,7 +2177,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('New thread'),
+                child: const Text('Create thread'),
               ),
             ],
           ),
@@ -2339,7 +2487,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   @override
   void dispose() {
     _loginEvents?.close();
-    _agentEvents?.close();
+    for (final source in _agentEventSources.values) {
+      source.close();
+    }
     _freeqPoller?.cancel();
     _highlightTimer?.cancel();
     _code.removeListener(_onEdit);
@@ -2867,7 +3017,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildAgent() => Column(
     children: [
-      _panelHeader('AGENT', [
+      _panelHeader(
+        _runningWorkThreads.isEmpty
+            ? 'AGENT'
+            : 'AGENT · ${_runningWorkThreads.length} RUNNING',
+        [
         IconButton(
           tooltip: 'Hand off to a FreeQ bot',
           visualDensity: VisualDensity.compact,
@@ -2921,8 +3075,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           onPressed: _agentBusy ? null : _showThreadHistory,
           icon: const Icon(Icons.history_outlined, size: 18),
         ),
-      ]),
+        ],
+      ),
       _buildAgentTabs(),
+      if (_agentPanelTab == _AgentPanelTab.chat) _buildWorkThreadSwitcher(),
       Expanded(
         child: switch (_agentPanelTab) {
           _AgentPanelTab.chat => _buildAgentConversation(),
@@ -2986,6 +3142,64 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ),
     );
   }
+
+  Widget _buildWorkThreadSwitcher() => Container(
+    height: 46,
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    decoration: const BoxDecoration(
+      color: Color(0xFF0D1117),
+      border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+    ),
+    child: Row(
+      children: [
+        Expanded(
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _workThreads.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 6),
+            itemBuilder: (context, index) {
+              final thread = _workThreads[index];
+              final selected = thread.id == _activeWorkThreadId;
+              final running = _runningWorkThreads.contains(thread.id);
+              return Tooltip(
+                message: thread.title,
+                child: ChoiceChip(
+                  selected: selected,
+                  onSelected: (_) => _selectWorkThread(thread.id),
+                  avatar: running
+                      ? const SizedBox.square(
+                          dimension: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          thread.messages.isEmpty
+                              ? Icons.chat_bubble_outline
+                              : Icons.chat_bubble,
+                          size: 14,
+                        ),
+                  label: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 130),
+                    child: Text(
+                      thread.title,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  visualDensity: VisualDensity.compact,
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(width: 6),
+        IconButton(
+          tooltip: 'New parallel work thread',
+          visualDensity: VisualDensity.compact,
+          onPressed: _resetAgent,
+          icon: const Icon(Icons.add, size: 18),
+        ),
+      ],
+    ),
+  );
 
   Widget _buildAgentConversation() => Column(
     children: [
