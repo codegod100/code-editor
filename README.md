@@ -142,6 +142,14 @@ repository. Do not use `GITHUB_TOKEN`: GitHub intentionally suppresses
 downstream workflow runs for pushes it creates, so a merge made with that token
 will not start the deployment workflow.
 
+The setup script obtains the currently authenticated GitHub CLI token and passes
+it to GitHub CLI on standard input; it does not use an environment variable,
+command-line argument, or file:
+
+```sh
+python3 scripts/configure_auto_merge_token.py
+```
+
 Use the included script to create or update the variable. It obtains the token
 from the authenticated GitHub CLI account, which must be allowed to manage
 Actions variables. From this repository checkout, it identifies the repository,
