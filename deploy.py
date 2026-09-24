@@ -212,6 +212,10 @@ def serve():
         "/health",
         "/auth/login", "/auth/authorize", "/auth/callback",
         "/oauth-client-metadata.json",
+        # Browsers retrieve the installed-app manifest independently of the
+        # application document.  Redirecting that request to the login page
+        # returns HTML at this URL, which surfaces as a manifest JSON error.
+        "/manifest.json",
         "/webhooks/github",
     }
 
