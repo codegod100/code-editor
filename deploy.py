@@ -1325,8 +1325,7 @@ def serve():
     async def get_session(name: str):
         return read_session(project_dir(name))
 
-    @api.delete("/api/projects/{name}/session")
-    async def reset_session(name: str, request: Request):
+    async def create_session_thread(name: str, request: Request):
         project = project_dir(name)
         body = await request.json()
         new_name = str(body.get("name", "")).strip()
@@ -1357,59 +1356,20 @@ def serve():
             await commit()
         return session
 
-    @api.post("/api/projects/{name}/workthreads")
-    async def create_work_thread(name: str, request: Request):
-        project = project_dir(name)
-        if not (project / ".git").exists():
-            raise HTTPException(400, "work threads require a Git repository")
-        body = await request.json()
-        thread_name = str(body.get("name", "")).strip()
-        if not thread_name:
-            raise HTTPException(400, "work thread name is required")
-        if len(thread_name) > 100:
-            raise HTTPException(400, "work thread name must be 100 characters or fewer")
-        async with mutation_lock:
-            for _ in range(10):
-                suffix = secrets.token_hex(4)
-                workspace_name = f"{name}-work-thread-{suffix}"
-                branch = f"codex/work-thread-{suffix}"
-                destination = root / workspace_name
-                if not destination.exists():
-                    break
-            else:
-                raise HTTPException(409, "could not allocate a unique worktree name")
-            result = await asyncio.to_thread(
-                git_result,
-                project,
-                "worktree",
-                "add",
-                "-b",
-                branch,
-                str(destination),
-                "HEAD",
-                timeout=120,
-            )
-            if result.returncode:
-                raise HTTPException(400, git_error(result, "could not create work thread"))
-            now = datetime.now(timezone.utc).isoformat()
-            thread_id = os.urandom(8).hex()
-            write_session(destination, {
-                "activeThreadId": thread_id,
-                "threads": [{
-                    "id": thread_id,
-                    "title": thread_name,
-                    "threadId": None,
-                    "messages": [],
-                    "createdAt": now,
-                    "updatedAt": now,
-                }],
-                "threadId": None,
-                "messages": [],
-                "handoffs": [],
-                "history": [],
-            })
-            await commit()
-        return {"name": workspace_name, "branch": branch, "startPoint": "HEAD"}
+    @api.post("/api/projects/{name}/session/threads")
+    async def post_session_thread(name: str, request: Request):
+        """Create a work thread inside an existing project.
+
+        Work threads are conversation/session records, not projects or Git
+        worktrees. Keeping this as a nested project resource prevents clients
+        from treating a new thread as another entry in the project picker.
+        """
+        return await create_session_thread(name, request)
+
+    @api.delete("/api/projects/{name}/session")
+    async def reset_session(name: str, request: Request):
+        """Backward-compatible alias for clients using the old reset route."""
+        return await create_session_thread(name, request)
 
     @api.delete("/api/projects/{name}/session/{thread_id}")
     async def archive_session_thread(name: str, thread_id: str):

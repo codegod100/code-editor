@@ -2237,43 +2237,23 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
-  Future<void> _resetAgent() async {
-    final project = _project;
-    if (project == null) return;
-    if (!project.isRepo) {
-      _showError('A new work thread requires a Git repository.');
-      return;
-    }
-    if (_runningWorkThreads.isNotEmpty) {
-      _showError('Stop running work threads before creating a new one.');
-      return;
-    }
-    if (_dirty && !await _confirmDiscard()) return;
+  Future<void> _createWorkThread() async {
+    if (_project == null) return;
     final name = TextEditingController();
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Create an isolated work thread'),
+        title: const Text('Create another work thread'),
         content: SizedBox(
           width: _dialogWidth(context, 420),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'The new thread starts on its own codex/work-thread branch and Git worktree, then opens as a separate workspace.',
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: name,
-                autofocus: true,
-                maxLength: 100,
-                decoration: const InputDecoration(
-                  labelText: 'Work thread name',
-                  hintText: 'Add search to the projects page',
-                ),
-              ),
-            ],
+          child: TextField(
+            controller: name,
+            autofocus: true,
+            maxLength: 100,
+            decoration: const InputDecoration(
+              labelText: 'Work thread name',
+              hintText: 'Add search to the projects page',
+            ),
           ),
         ),
         actions: [
@@ -2288,23 +2268,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 Navigator.pop(context, trimmed);
               }
             },
-            child: const Text('Create worktree'),
+            child: const Text('Create thread'),
           ),
         ],
       ),
     );
     name.dispose();
     if (result == null) return;
-    setState(() => _loading = true);
     try {
-      final response = await _request('POST', _projectUrl('/workthreads'), {
+      await _request('POST', _projectUrl('/session/threads'), {
         'name': result,
       });
-      await _refreshProjects(select: response['name'] as String);
+      await _loadSession();
     } catch (error) {
       _showError(error);
-    } finally {
-      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -3378,7 +3355,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           ),
         IconButton(
           tooltip: 'New thread',
-          onPressed: _resetAgent,
+          onPressed: _createWorkThread,
           icon: const Icon(Icons.add_comment_outlined),
         ),
         PopupMenuButton<String>(
@@ -3467,7 +3444,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       IconButton(
         tooltip: 'New thread',
         visualDensity: VisualDensity.compact,
-        onPressed: _resetAgent,
+        onPressed: _createWorkThread,
         icon: const Icon(Icons.add_comment_outlined, size: 18),
       ),
       IconButton(
@@ -3586,7 +3563,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         IconButton(
           tooltip: 'New parallel work thread',
           visualDensity: VisualDensity.compact,
-          onPressed: _resetAgent,
+          onPressed: _createWorkThread,
           icon: const Icon(Icons.add, size: 18),
         ),
       ],
