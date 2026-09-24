@@ -892,6 +892,56 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     _ => false,
   };
 
+  void _openExternalUrl(String value) {
+    final uri = Uri.tryParse(value);
+    if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')) {
+      return;
+    }
+    html.window.open(uri.toString(), '_blank');
+  }
+
+  Widget _externalLink(String value, {String? label}) => TextButton.icon(
+    onPressed: () => _openExternalUrl(value),
+    style: TextButton.styleFrom(
+      padding: EdgeInsets.zero,
+      minimumSize: Size.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      alignment: Alignment.centerLeft,
+    ),
+    icon: const Icon(Icons.open_in_new, size: 13),
+    label: Text(
+      label ?? value,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(decoration: TextDecoration.underline),
+    ),
+  );
+
+  Widget _messageText(String value) {
+    final matches = RegExp(r'https?://[^\s<>()]+').allMatches(value).toList();
+    if (matches.isEmpty) return SelectableText(value);
+
+    final parts = <Widget>[];
+    var offset = 0;
+    for (final match in matches) {
+      if (match.start > offset) {
+        parts.add(Text(value.substring(offset, match.start)));
+      }
+      final url = match.group(0)!;
+      final uri = Uri.tryParse(url);
+      parts.add(
+        _externalLink(
+          url,
+          label: uri?.host == 'agentgit.co'
+              ? 'Open AgentGit exchange'
+              : 'Open link',
+        ),
+      );
+      offset = match.end;
+    }
+    if (offset < value.length) parts.add(Text(value.substring(offset)));
+    return Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: parts);
+  }
+
   Widget _buildFreeqHandoffs() {
     final active = _freeqHandoffs
         .where(
@@ -954,6 +1004,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             final botName =
                 handoff['botName']?.toString() ?? 'Open channel offer';
             final note = handoff['note']?.toString().trim() ?? '';
+            final exchangeUrl = handoff['exchangeUrl']?.toString() ?? '';
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Container(
@@ -1007,6 +1058,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
+                    if (exchangeUrl.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      _externalLink(exchangeUrl, label: 'Open AgentGit review'),
+                    ],
                   ],
                 ),
               ),
@@ -1040,10 +1095,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                       ],
                     ),
                     if (exchangeUrl.isNotEmpty)
-                      SelectableText(
-                        'AgentGit review: $exchangeUrl',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
+                      _externalLink(exchangeUrl, label: 'Open AgentGit review'),
                   ],
                 ),
               );
@@ -2782,7 +2834,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                 ),
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: SelectableText(_streamedResponse),
+                              child: _messageText(_streamedResponse),
                             ),
                           ],
                         ],
@@ -2806,7 +2858,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         border: Border.all(color: const Color(0xFF30363D)),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: SelectableText(message.text),
+                      child: _messageText(message.text),
                     ),
                   );
                 },
