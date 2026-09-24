@@ -80,26 +80,35 @@ jobs:
             )"
             if [[ "$app_state" == "deployed" ]]; then
               echo "Modal API verified cloud-code-editor is deployed."
-              python -c '
+              if health_release="$(python -c '
           import json
           import os
-          import sys
           from urllib.request import urlopen
 
           with urlopen(os.environ["CODE_EDITOR_APP_URL"] + "/health", timeout=60) as response:
               health = json.load(response)
-          expected_release = os.environ["GITHUB_SHA"]
-          if health != {"status": "ok", "release": expected_release}:
+          if not isinstance(health, dict) or health.get("status") != "ok":
               raise SystemExit(
-                f"unexpected health response: {health!r}; "
-                f"expected release {expected_release!r}"
+                f"unexpected health response: {health!r}"
               )
-          '
-              echo "Health endpoint verified deployed release $GITHUB_SHA."
-              exit 0
+          release = health.get("release")
+          if not isinstance(release, str):
+              raise SystemExit(f"health response has no release: {health!r}")
+          print(release)
+          ')"; then
+                if [[ "$health_release" == "$GITHUB_SHA" ]]; then
+                  echo "Health endpoint verified deployed release $GITHUB_SHA."
+                  exit 0
+                fi
+                echo "Health endpoint still serves $health_release; waiting for $GITHUB_SHA (attempt $attempt/30)"
+              else
+                echo "Health endpoint is not ready yet (attempt $attempt/30)"
+              fi
+              sleep 10
+              continue
             fi
             echo "Modal API reports cloud-code-editor state: $app_state (attempt $attempt/30)"
             sleep 10
           done
-          echo "Modal API did not report cloud-code-editor as deployed within 5 minutes." >&2
+          echo "cloud-code-editor did not serve release $GITHUB_SHA within 5 minutes." >&2
           exit 1
