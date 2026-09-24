@@ -143,6 +143,7 @@ image = (
         {
             "APP_URL": "https://codegod100--cloud-code-editor-serve.modal.run",
             "APP_RELEASE": release_version,
+            RELEASE_VERSION_ENV: release_version,
             "CODEX_HOME": "/workspace/.codex",
         }
     )
@@ -200,7 +201,9 @@ def serve():
     terminal_sessions = {}
 
     app_url = os.environ["APP_URL"].rstrip("/")
+    app_release = os.environ["APP_RELEASE"]
     public_paths = {
+        "/health",
         "/auth/login", "/auth/authorize", "/auth/callback",
         "/oauth-client-metadata.json",
     }
@@ -224,6 +227,10 @@ def serve():
         same_site="lax",
         max_age=12 * 60 * 60,
     )
+
+    @api.get("/health")
+    async def health():
+        return {"status": "ok", "release": app_release}
 
     async def atproto_oauth(command: str, payload: dict) -> dict:
         """Run the official OAuth client with durable state on the project Volume."""
