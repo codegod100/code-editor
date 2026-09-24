@@ -1,0 +1,24 @@
+{
+  "name": "freeq-bot",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@freeq/bot-kit": "^0.1.0",
+    "@freeq/sdk": "^0.1.0",
+    "modal": "^0.10.1",
+    "tsx": "^4.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.9.3"
+  },
+  "scripts": {
+    "start": "tsx src/bot.ts",
+    "dev": "tsx watch src/bot.ts",
+    "typecheck": "tsc --noEmit",
+    "offer": "tsx src/fire-offer.ts"
+  }
+}

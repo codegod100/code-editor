@@ -902,12 +902,12 @@ def serve():
                 status = event.get("status") or event.get("type")
                 actor = event.get("actor") or handoff.get("botName")
                 note = str(event.get("note") or "")
-                if status == "accepted":
+                if status in {"accepted", "claimed"}:
                     async with mutation_lock:
                         session = read_session(project)
                         for saved in session.get("handoffs", []):
                             if saved.get("taskId") == task_id:
-                                saved.update({"status": "accepted", "botName": actor})
+                                saved.update({"status": "claimed", "botName": actor})
                         write_session(project, session)
                         await commit()
                     continue
@@ -968,8 +968,8 @@ def serve():
             if not isinstance(event, dict):
                 continue
             verb = event.get("event")
-            if verb in {"accept", "complete", "fail", "decline"}:
-                latest = str(verb)
+            if verb in {"accept", "claim", "complete", "fail", "decline"}:
+                latest = "claimed" if verb in {"accept", "claim"} else str(verb)
                 fields = event.get("details") if isinstance(event.get("details"), dict) else {}
                 note = str(fields.get("note") or fields.get("ctx") or note)
                 claimant = event.get("actor_name") or event.get("actor_did") or claimant

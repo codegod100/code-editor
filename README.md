@@ -91,6 +91,25 @@ and `ctx`, then remains connected until the offer reaches `complete`, `fail`,
 `decline`, or its deadline. It then exits cleanly. A bot must be present in
 that channel and claim the selected capability.
 
+### Fly worker
+
+The long-lived Fly worker that claims editor offers lives in
+[services/freeq-bot](services/freeq-bot). Its deployed contract is explicit:
+freeq-bot stays connected to #tasks and only claims prime_agent offers. The
+current Fly machine mounts its durable state volume at /data, which holds its
+did:key identity; do not remove or replace that volume during deployments.
+
+Deploy the worker from that directory so Fly uses its Dockerfile and config:
+
+~~~sh
+cd services/freeq-bot
+fly deploy
+~~~
+
+The editor now recognizes the worker's canonical claim event in addition to the
+legacy accept event. A handoff using another capability, such as call_tool, is
+intentionally left unclaimed by this worker.
+
 ```sh
 python3 deploy.py
 ```

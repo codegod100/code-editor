@@ -38,9 +38,10 @@ bot.on('actEvent', (event) => {
   if (event.kind !== 'handoff' || event.taskId !== taskId) return;
   const note = event.fields?.['act-note'] || event.fields?.['act-ctx'] || '';
   const actor = event.did || event.fields?.['act-from'] || '';
-  if (event.verb === 'accept') {
+  // The canonical Fly worker uses claim; tolerate the older accept verb too.
+  if (['claim', 'accept'].includes(event.verb)) {
     bot.setState('executing', `handoff ${taskId} claimed`);
-    process.stdout.write(JSON.stringify({ type: 'accepted', taskId, actor, note }) + '\n');
+    process.stdout.write(JSON.stringify({ type: 'claimed', taskId, actor, note }) + '\n');
   }
   if (['complete', 'fail', 'decline'].includes(event.verb)) {
     finish({ type: 'terminal', taskId, status: event.verb, actor, note });
