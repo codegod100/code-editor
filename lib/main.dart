@@ -304,6 +304,8 @@ class WorkspaceScreen extends StatefulWidget {
 }
 
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
+  static const _lastProjectStorageKey = 'cloud-code-editor.last-project';
+
   final _code = SyntaxHighlightingController();
   final _agentPrompt = TextEditingController();
   final _editorFocus = FocusNode();
@@ -452,6 +454,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   String _projectUrl(String suffix) =>
       '/api/projects/${Uri.encodeComponent(_project!.name)}$suffix';
 
+  String? get _lastProjectName =>
+      html.window.localStorage[_lastProjectStorageKey];
+
+  void _rememberProject(ProjectSummary project) {
+    html.window.localStorage[_lastProjectStorageKey] = project.name;
+  }
+
+  void _forgetLastProject() {
+    html.window.localStorage.remove(_lastProjectStorageKey);
+  }
+
   Future<void> _loadInitial() async {
     try {
       final values = await Future.wait([
@@ -473,7 +486,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         _userEmail = values[2]['did'] as String? ?? '';
         _loading = false;
       });
-      if (projectValues.isNotEmpty) await _selectProject(projectValues.first);
+      if (projectValues.isNotEmpty) {
+        final rememberedProject = projectValues
+            .where((project) => project.name == _lastProjectName)
+            .firstOrNull;
+        await _selectProject(rememberedProject ?? projectValues.first);
+      }
     } catch (error) {
       _showError(error);
       if (mounted) setState(() => _loading = false);
@@ -518,6 +536,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _loading = true;
       _error = null;
     });
+    _rememberProject(project);
     try {
       await Future.wait([_refreshTree(), _loadSession(), _refreshGitStatus()]);
     } catch (error) {
@@ -1381,6 +1400,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     _terminals.clear();
     _activeTerminalId = null;
     _code.clear();
+    _forgetLastProject();
     setState(() {
       _project = null;
       _path = null;
