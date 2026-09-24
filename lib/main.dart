@@ -2914,7 +2914,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 const SizedBox(width: 8),
                 IconButton(
                   tooltip: 'Create a pull request after pushing this branch',
-                  semanticLabel: 'Create pull request',
                   onPressed:
                       _gitBusy ||
                           !status.hasRemote ||
@@ -2923,11 +2922,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                           status.ahead == 0
                       ? null
                       : _createPullRequest,
-                  icon: const Icon(Icons.call_merge_outlined, size: 19),
+                  icon: const Icon(
+                    Icons.call_merge_outlined,
+                    size: 19,
+                    semanticLabel: 'Create pull request',
+                  ),
                 ),
                 IconButton(
                   tooltip: 'Enable auto-merge for this branch\'s pull request',
-                  semanticLabel: 'Enable pull request auto-merge',
                   onPressed:
                       _gitBusy ||
                           !status.hasRemote ||
@@ -2935,7 +2937,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                           status.changedCount > 0
                       ? null
                       : _enableAutoMerge,
-                  icon: const Icon(Icons.merge_type_outlined, size: 19),
+                  icon: const Icon(
+                    Icons.merge_type_outlined,
+                    size: 19,
+                    semanticLabel: 'Enable pull request auto-merge',
+                  ),
                 ),
               ],
             ),
