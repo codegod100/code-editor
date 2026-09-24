@@ -138,7 +138,7 @@ image = (
     modal.Image.from_registry(
         "ghcr.io/cirruslabs/flutter:stable", add_python="3.12"
     )
-    .apt_install("acl", "bash", "curl", "fish", "git", "gh", "sudo")
+    .apt_install("acl", "bash", "curl", "fish", "git", "gh", "sudo", "util-linux")
     .pip_install(
         "fastapi[standard]==0.121.3",
         "itsdangerous==2.2.0",
@@ -2051,6 +2051,11 @@ def serve():
                 # non-interactive parent shell as well as in Popen so the interactive
                 # shell inherits the selected project directory deterministically.
                 [
+                    # openpty() gives the shell terminal file descriptors, but a
+                    # newly created session still needs to claim the slave as its
+                    # controlling terminal.  Fish checks that relationship when
+                    # enabling job control and warns when it is missing.
+                    "setsid", "--ctty",
                     "sudo", "--set-home", "--user", "coder", "--",
                     "bash", "--noprofile", "--norc", "-c",
                     'cd -- "$1" || exit 1\nexec fish -i',
@@ -2061,7 +2066,6 @@ def serve():
                 stdout=slave_fd,
                 stderr=slave_fd,
                 env=environment,
-                start_new_session=True,
             )
             os.close(slave_fd)
             session = {"master_fd": master_fd, "process": process, "output": bytearray()}
