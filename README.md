@@ -120,6 +120,22 @@ intentionally left unclaimed by this worker.
 python3 deploy.py
 ```
 
+### Continuous deployment
+
+Pushes to `main` run `.github/workflows/deploy-cloud-code-editor.yml`, which
+deploys the merge commit to Modal. Configure a Modal service user with
+Contributor access to the deployment environment, then run this script. It
+securely prompts for both credentials, so they are not placed in shell history:
+
+```sh
+python3 scripts/configure_modal_github_secrets.py
+```
+
+The setup script requires an authenticated GitHub CLI session with permission
+to manage repository Actions secrets. It sets `MODAL_TOKEN_ID` and
+`MODAL_TOKEN_SECRET` only; the values are passed to `gh` on standard input and
+are never printed.
+
 The first image build installs Flutter, FastAPI, Git, and the pinned Codex
 Python SDK, then compiles the Flutter release bundle. Later builds reuse Modal's
 image layers.

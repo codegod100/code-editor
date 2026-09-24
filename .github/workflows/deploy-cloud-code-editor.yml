@@ -1,0 +1,35 @@
+name: Deploy Cloud Code Editor
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      # Deploy the revision checked out by this workflow. The local launcher
+      # normally fetches origin/main before deploying; CI has already checked
+      # out the merge commit that triggered this run.
+      CODE_EDITOR_DEPLOYING_ORIGIN_MAIN: "1"
+
+    steps:
+      - name: Check out merged revision
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Modal CLI
+        run: python -m pip install --upgrade "modal==1.5.4"
+
+      - name: Deploy to Modal
+        run: modal deploy deploy.py
