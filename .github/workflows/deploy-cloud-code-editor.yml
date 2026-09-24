@@ -4,13 +4,40 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - .github/ci/Dockerfile
+      - .github/workflows/publish-ci-image.yml
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
-  deploy:
+  resolve-ci-image:
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+
+    steps:
+      - id: image
+        name: Validate pinned CI image digest
+        env:
+          CI_IMAGE_DIGEST: ${{ vars.CODE_EDITOR_CI_IMAGE_DIGEST }}
+        run: |
+          if [[ ! "$CI_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "CODE_EDITOR_CI_IMAGE_DIGEST must be a sha256 digest from Publish CI Base Image." >&2
+            exit 1
+          fi
+          echo "image=ghcr.io/${{ github.repository_owner }}/code-editor-ci@$CI_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: resolve-ci-image
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.resolve-ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -23,14 +50,6 @@ jobs:
     steps:
       - name: Check out merged revision
         uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Modal CLI
-        run: python -m pip install --upgrade "modal==1.5.4"
 
       - name: Deploy to Modal
         run: modal deploy deploy.py

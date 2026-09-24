@@ -123,7 +123,19 @@ python3 deploy.py
 ### Continuous deployment
 
 Pushes to `main` run `.github/workflows/deploy-cloud-code-editor.yml`, which
-deploys the merge commit to Modal. Configure a Modal service user with
+deploys the merge commit to Modal using a digest-pinned `code-editor-ci` image
+in GitHub Container Registry. The image contains Python 3.12, Git, and the
+pinned Modal CLI; it is rebuilt only when `.github/ci/Dockerfile` or its
+publishing workflow changes (or when **Publish CI Base Image** is run manually).
+
+Run **Publish CI Base Image** once before the first deployment. Copy the
+workflow's `digest` job output into the GitHub Actions repository variable
+`CODE_EDITOR_CI_IMAGE_DIGEST` (for example, `sha256:...`). The deploy workflow
+validates that required value before starting a container, and uses the exact
+published digest rather than the mutable `v1` tag. After a deliberate CI image
+update, replace that variable with the newly published digest to adopt it.
+
+Configure a Modal service user with
 Contributor access to the deployment environment, then run this script. It
 securely prompts for both credentials, so they are not placed in shell history:
 
