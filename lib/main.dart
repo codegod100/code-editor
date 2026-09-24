@@ -2059,7 +2059,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               : ListView.separated(
                   shrinkWrap: true,
                   itemCount: _threadHistory.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  separatorBuilder: (context, index) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     final thread = _threadHistory[index];
                     final timestamp = DateTime.tryParse(
@@ -2104,7 +2104,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         height: 480,
         child: ListView.separated(
           itemCount: thread.messages.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 10),
+          separatorBuilder: (context, index) => const SizedBox(height: 10),
           itemBuilder: (context, index) {
             final message = thread.messages[index];
             final user = message.role == 'user';
