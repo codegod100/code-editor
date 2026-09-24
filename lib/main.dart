@@ -307,6 +307,8 @@ class WorkspaceScreen extends StatefulWidget {
 
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
   static const _lastProjectStorageKey = 'cloud-code-editor.last-project';
+  static const _lastFreeqCapabilityStorageKey =
+      'cloud-code-editor.last-freeq-capability';
 
   final _code = SyntaxHighlightingController();
   final _agentPrompt = TextEditingController();
@@ -460,12 +462,19 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   String? get _lastProjectName =>
       html.window.localStorage[_lastProjectStorageKey];
 
+  String? get _lastFreeqCapability =>
+      html.window.localStorage[_lastFreeqCapabilityStorageKey];
+
   void _rememberProject(ProjectSummary project) {
     html.window.localStorage[_lastProjectStorageKey] = project.name;
   }
 
   void _forgetLastProject() {
     html.window.localStorage.remove(_lastProjectStorageKey);
+  }
+
+  void _rememberFreeqCapability(String capability) {
+    html.window.localStorage[_lastFreeqCapabilityStorageKey] = capability;
   }
 
   Future<void> _loadInitial() async {
@@ -661,7 +670,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             .toList();
         capabilities = bots.expand((bot) => bot.capabilities).toSet().toList()
           ..sort();
-        capability = capabilities.isEmpty ? null : capabilities.first;
+        final rememberedCapability = _lastFreeqCapability;
+        capability = capabilities.contains(rememberedCapability)
+            ? rememberedCapability
+            : capabilities.isEmpty
+            ? null
+            : capabilities.first;
       } catch (error) {
         discoveryError = error.toString();
       } finally {
@@ -772,7 +786,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         },
       ),
     );
-    if (accepted != true || capability == null) {
+    final usedCapability = capability;
+    if (accepted != true || usedCapability == null) {
       server.dispose();
       channel.dispose();
       task.dispose();
@@ -783,7 +798,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       final handoff = await _request('POST', _projectUrl('/freeq/handoffs'), {
         'server': server.text.trim(),
         'channel': channel.text.trim(),
-        'capability': capability,
+        'capability': usedCapability,
         'title': task.text.trim(),
         'context': handoffContext.text.trim(),
       });
@@ -799,6 +814,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           ),
         ];
       });
+      _rememberFreeqCapability(usedCapability);
       _ensureFreeqPolling();
       _scrollMessages();
     } catch (error) {
