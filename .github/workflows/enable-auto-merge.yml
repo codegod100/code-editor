@@ -1,0 +1,34 @@
+name: Enable Pull Request Auto-Merge
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - synchronize
+
+# This workflow deliberately does not check out or run pull-request code. It
+# only calls GitHub's API from the trusted default-branch workflow definition.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge when it is not already enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json autoMergeRequest --jq 'if .autoMergeRequest == null then "pending" else "enabled" end')"
+          if [[ "$state" == "enabled" ]]; then
+            echo "Auto-merge is already enabled for pull request #$PR_NUMBER."
+            exit 0
+          fi
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --merge
