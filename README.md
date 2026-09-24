@@ -7,7 +7,7 @@ The Flutter UI and FastAPI backend deploy together as one Modal application.
 
 - Creates durable project folders or clones Git repositories.
 - Browses and edits UTF-8 project files in the browser.
-- Starts and resumes one Codex SDK thread per project.
+- Keeps multiple named Codex work threads per project and runs them in parallel.
 - Lets Codex inspect, edit, and verify the selected project with
   `workspace-write` sandbox access.
 - Provides an authenticated, project-rooted browser terminal rendered by
@@ -23,7 +23,7 @@ All mutable state is on the Modal v2 Volume
 
 - `/workspace/<project>` contains the folder or Git checkout.
 - `/workspace/<project>/.code-editor/session.json` contains the project's Codex
-  thread id and visible conversation history.
+  thread ids, active-thread selection, and visible conversation histories.
 - `/workspace/.codex` is `CODEX_HOME` and contains the server-side Codex login
   and runtime state.
 - `/workspace/.freeq-bots` holds the did:key identity and delegation certificate
