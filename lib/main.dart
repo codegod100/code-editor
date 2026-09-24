@@ -1794,6 +1794,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           _agentActivity = const [];
           _streamedResponse = '';
         });
+        _scrollMessages();
       }
     }
   }
@@ -2041,13 +2042,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   void _scrollMessages() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_messagesScroll.hasClients) {
-        _messagesScroll.animateTo(
-          _messagesScroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
+      if (!mounted || !_messagesScroll.hasClients) return;
+      _messagesScroll.jumpTo(_messagesScroll.position.maxScrollExtent);
     });
   }
 
@@ -2669,7 +2665,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               selected: selected,
               label: '${tab.$2} tab',
               child: TextButton.icon(
-                onPressed: () => setState(() => _agentPanelTab = tab.$1),
+                onPressed: () {
+                  setState(() => _agentPanelTab = tab.$1);
+                  if (tab.$1 == _AgentPanelTab.chat) _scrollMessages();
+                },
                 icon: Icon(tab.$3, size: 16),
                 label: Text(tab.$2, overflow: TextOverflow.ellipsis),
                 style: TextButton.styleFrom(
