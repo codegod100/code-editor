@@ -304,6 +304,7 @@ class SyntaxHighlightingController extends TextEditingController {
 
 const _terminalViewType = 'libghostty-terminal';
 bool _terminalViewRegistered = false;
+final _terminalInteractionEnabled = ValueNotifier<bool>(true);
 
 void _registerTerminalView() {
   if (_terminalViewRegistered) return;
@@ -331,17 +332,34 @@ class GhosttyTerminal extends StatefulWidget {
 }
 
 class _GhosttyTerminalState extends State<GhosttyTerminal> {
+  html.IFrameElement? _frame;
+
   @override
   void initState() {
     super.initState();
     _registerTerminalView();
+    _terminalInteractionEnabled.addListener(_updatePointerEvents);
   }
 
   void _configureFrame(int viewId) {
     final frame =
         ui_web.platformViewRegistry.getViewById(viewId) as html.IFrameElement;
+    _frame = frame;
     frame.src =
         'terminal/terminal.html?project=${Uri.encodeQueryComponent(widget.projectName)}&session=${widget.sessionId}';
+    _updatePointerEvents();
+  }
+
+  void _updatePointerEvents() {
+    _frame?.style.pointerEvents = _terminalInteractionEnabled.value
+        ? 'auto'
+        : 'none';
+  }
+
+  @override
+  void dispose() {
+    _terminalInteractionEnabled.removeListener(_updatePointerEvents);
+    super.dispose();
   }
 
   @override
@@ -358,6 +376,63 @@ class TerminalSession {
   final int id;
 
   String get label => 'Terminal $id';
+}
+
+class _CommitDialog extends StatefulWidget {
+  const _CommitDialog({
+    required this.changedCount,
+    required this.suggestedMessage,
+  });
+
+  final int changedCount;
+  final String suggestedMessage;
+
+  @override
+  State<_CommitDialog> createState() => _CommitDialogState();
+}
+
+class _CommitDialogState extends State<_CommitDialog> {
+  late final TextEditingController _message = TextEditingController(
+    text: widget.suggestedMessage,
+  );
+
+  @override
+  void dispose() {
+    _message.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(
+      'Commit ${widget.changedCount} changed file${widget.changedCount == 1 ? '' : 's'}',
+    ),
+    content: TextField(
+      controller: _message,
+      autofocus: true,
+      onChanged: (_) => setState(() {}),
+      onSubmitted: (_) => _commit(),
+      decoration: const InputDecoration(
+        labelText: 'Commit message',
+        helperText: 'Chosen by Codex; edit if needed.',
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: _message.text.trim().isEmpty ? null : _commit,
+        child: const Text('Commit'),
+      ),
+    ],
+  );
+
+  void _commit() {
+    final message = _message.text.trim();
+    if (message.isNotEmpty) Navigator.pop(context, message);
+  }
 }
 
 class WorkspaceScreen extends StatefulWidget {
@@ -1484,34 +1559,19 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     } finally {
       if (mounted) setState(() => _gitBusy = false);
     }
-    final message = TextEditingController(text: suggestedMessage);
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          'Commit ${status.changedCount} changed file${status.changedCount == 1 ? '' : 's'}',
+    _terminalInteractionEnabled.value = false;
+    String? value;
+    try {
+      value = await showDialog<String>(
+        context: context,
+        builder: (context) => _CommitDialog(
+          changedCount: status.changedCount,
+          suggestedMessage: suggestedMessage,
         ),
-        content: TextField(
-          controller: message,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Commit message',
-            helperText: 'Chosen by Codex; edit if needed.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, message.text.trim()),
-            child: const Text('Commit'),
-          ),
-        ],
-      ),
-    );
-    message.dispose();
+      );
+    } finally {
+      _terminalInteractionEnabled.value = true;
+    }
     if (value == null || value.isEmpty) return;
     await _runGitAction('/git/commit', {'message': value}, 'Commit created');
   }
