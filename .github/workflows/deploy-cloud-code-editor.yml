@@ -67,15 +67,19 @@ jobs:
           import sys
 
           apps = json.load(sys.stdin)
-          matches = [
+          deployed_matches = [
               app for app in apps
-              if app.get("description") == "cloud-code-editor"
-          ]
-          if len(matches) != 1:
-              raise SystemExit(
-                  f"expected exactly one cloud-code-editor app, found {len(matches)}"
+              if (
+                  app.get("description") == "cloud-code-editor"
+                  and app.get("state") == "deployed"
               )
-          print(matches[0].get("state", ""))
+          ]
+          if len(deployed_matches) != 1:
+              raise SystemExit(
+                  "expected exactly one deployed cloud-code-editor app, "
+                  f"found {len(deployed_matches)}"
+              )
+          print(deployed_matches[0]["state"])
           '
             )"
             if [[ "$app_state" == "deployed" ]]; then
