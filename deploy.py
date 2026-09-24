@@ -421,10 +421,35 @@ def serve():
     def ensure_git_repository(project: Path) -> None:
         """Initialize projects created outside the editor when they are opened."""
         if (project / ".git").exists():
+            repository = git_result(project, "rev-parse", "--is-inside-work-tree")
+            if repository.returncode:
+                raise HTTPException(400, "project .git metadata is not a valid Git repository")
+        else:
+            result = git_result(project, "init", "--initial-branch=main", timeout=120)
+            if result.returncode:
+                raise HTTPException(500, git_error(result, "could not initialize Git repository"))
+
+        head = git_result(project, "rev-parse", "--verify", "HEAD")
+        if head.returncode == 0:
             return
-        result = git_result(project, "init", "--initial-branch=main", timeout=120)
-        if result.returncode:
-            raise HTTPException(500, git_error(result, "could not initialize Git repository"))
+
+        add = git_result(project, "add", "-A", "--", ".", ":(exclude).code-editor", timeout=120)
+        if add.returncode:
+            raise HTTPException(500, git_error(add, "could not stage the initial commit"))
+        initial_commit = git_result(
+            project,
+            "-c",
+            "user.name=Cloud Code Editor",
+            "-c",
+            "user.email=cloud-code-editor@users.noreply.github.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Initial commit",
+            timeout=120,
+        )
+        if initial_commit.returncode:
+            raise HTTPException(500, git_error(initial_commit, "could not create the initial commit"))
 
     def git_status(project: Path) -> dict:
         ensure_git_repository(project)
