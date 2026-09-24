@@ -2013,17 +2013,27 @@ def serve():
             # but interactive commands should not start with unrestricted root
             # privileges.  ACLs let the terminal account edit existing content
             # and make that access inherit to files the API creates later.
-            subprocess.run(
-                ["setfacl", "--recursive", "--modify", "u:coder:rwX", str(project)],
-                check=True,
-            )
-            subprocess.run(
-                [
-                    "find", str(project), "-type", "d", "-exec",
-                    "setfacl", "--modify", "d:u:coder:rwx", "{}", "+",
-                ],
-                check=True,
-            )
+            try:
+                subprocess.run(
+                    ["setfacl", "--recursive", "--modify", "u:coder:rwX", str(project)],
+                    check=True,
+                )
+                subprocess.run(
+                    [
+                        "find", str(project), "-type", "d", "-exec",
+                        "setfacl", "--modify", "d:u:coder:rwx", "{}", "+",
+                    ],
+                    check=True,
+                )
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                # Some mounted filesystems do not implement POSIX ACLs.  Do not
+                # abort an already-accepted WebSocket in that case: making the
+                # terminal user the tree owner still keeps the shell non-root,
+                # while the root API process retains full access.
+                subprocess.run(
+                    ["chown", "--recursive", "coder:coder", str(project)],
+                    check=True,
+                )
             master_fd, slave_fd = pty.openpty()
             environment = os.environ.copy()
             environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
