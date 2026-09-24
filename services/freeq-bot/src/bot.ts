@@ -25,6 +25,9 @@ const channels = required("FREEQ_CHANNELS")
 if (channels.length === 0 || channels.some((channel) => !channel.startsWith("#"))) {
   throw new Error("FREEQ_CHANNELS must contain one or more channel names beginning with #");
 }
+if (!/^[a-z][a-z0-9_]{0,63}$/.test(CAPABILITY)) {
+  throw new Error("FREEQ_CAPABILITY must be a lowercase identifier");
+}
 
 function required(key: string): string {
   const value = process.env[key]?.trim();
@@ -43,6 +46,19 @@ const bot = await FreeqBot.create({
   actorClass: "agent",
   initialState: "idle",
   initialStatus: "editor handoff worker · caps=" + CAPABILITY,
+  manifest: [
+    "[agent]",
+    'actor_class = "agent"',
+    'display_name = "Code Editor Prime Worker"',
+    'description = "Claims Code Editor FreeQ handoffs and dispatches them to the configured task runner."',
+    'source_repo = "https://github.com/codegod100/code-editor"',
+    'version = "0.1.0"',
+    "",
+    "[capabilities]",
+    "default = [" + JSON.stringify(CAPABILITY) + "]",
+    "",
+    "[capabilities.channels]",
+  ].join("\n"),
 });
 
 bot.on("channelJoined", (channel) => console.error("[worker] joined " + channel));

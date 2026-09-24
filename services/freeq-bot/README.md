@@ -14,6 +14,10 @@ button. It is intentionally a worker, not a chat bot:
 The worker has no HTTP service. It keeps one outbound WebSocket open and must
 remain running, so Fly must not autostop it.
 
+On every connection it publishes a signed FreeQ agent manifest. The editor
+discovers the manifest from FreeQ's public agent feed, so the capability offered
+in its handoff dialog is the same capability this worker actually claims.
+
 ## Configuration
 
 Copy .env.example for local use. Every operational value is required; startup
