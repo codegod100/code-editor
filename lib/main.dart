@@ -1830,7 +1830,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (project == null || !project.isRepo || _gitBusy) return;
     final workspace = TextEditingController(text: '${project.name}-worktree');
     final branch = TextEditingController();
-    final startPoint = TextEditingController(text: project.branch);
+    final startPoint = TextEditingController(text: 'main');
     final values = await showDialog<List<String>>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1841,7 +1841,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'A worktree has its own checkout and new branch, so Codex can work without changing this workspace.',
+                'A worktree has its own checkout and new branch, so Codex can work without changing this workspace. '
+                'Main is updated from origin before the worktree is created.',
               ),
               const SizedBox(height: 16),
               TextField(

@@ -1096,8 +1096,29 @@ def serve():
         async with mutation_lock:
             if destination.exists():
                 raise HTTPException(409, "a project or worktree with that name already exists")
+            effective_start_point = start_point
+            if start_point == "main":
+                remote = await asyncio.to_thread(
+                    git_result, project, "remote", "get-url", "origin"
+                )
+                if remote.returncode == 0:
+                    update = await asyncio.to_thread(
+                        git_result, project, "fetch", "origin", "main", timeout=120
+                    )
+                    if update.returncode:
+                        raise HTTPException(
+                            400, git_error(update, "could not update main from origin")
+                        )
+                    effective_start_point = "origin/main"
             result = await asyncio.to_thread(
-                git_result, project, "worktree", "add", "-b", branch, str(destination), start_point,
+                git_result,
+                project,
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                str(destination),
+                effective_start_point,
                 timeout=120,
             )
             if result.returncode:
