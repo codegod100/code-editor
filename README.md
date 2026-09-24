@@ -148,6 +148,35 @@ to manage repository Actions secrets. It sets `MODAL_TOKEN_ID` and
 `MODAL_TOKEN_SECRET` only; the values are passed to `gh` on standard input and
 are never printed.
 
+### CI failure repair webhook
+
+The deployed service can turn an eligible failed GitHub Actions run into a
+Codex-authored **draft** pull request. It receives only signed `workflow_run`
+events and accepts failures only from an explicit repository allowlist. It
+ignores pull-request runs and branches beginning `codex/`, preventing repair
+PRs from recursively triggering more repairs. A durable ledger at
+`/workspace/.system/ci-repairs.json` deduplicates each repository/run pair
+across restarts; repair checkouts themselves are temporary and removed when a
+run finishes.
+
+Before deployment, configure the required Modal Secret and GitHub webhook.
+By default, the setup script uses the current authenticated `gh` token and
+generates a high-entropy webhook secret itself; neither value is printed. The
+token needs Actions read access and Contents/Pull requests read-write access
+on each configured repository. It replaces the Modal secret and creates or
+updates the webhook using the authenticated GitHub CLI account:
+
+```sh
+python3 scripts/configure_ci_repair_webhook.py
+```
+
+Pass `--repo owner/repository` more than once to enable multiple repositories,
+and `--environment main` when the deployment uses a named Modal environment.
+For a least-privilege dedicated bot token, pass `--prompt-github-token` instead.
+The service fetches the failed log, checks out the precise failed SHA, asks
+Codex for the smallest verified repair, and creates a draft PR only when Codex
+leaves a real change to commit. It never auto-merges the result.
+
 The first image build installs Flutter, FastAPI, Git, and the pinned Codex
 Python SDK, then compiles the Flutter release bundle. Later builds reuse Modal's
 image layers.
