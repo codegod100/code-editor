@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -376,11 +377,19 @@ def serve():
     def read_session(project: Path) -> dict:
         path = session_path(project)
         if not path.exists():
-            return {"threadId": None, "messages": [], "handoffs": []}
+            return {"threadId": None, "messages": [], "handoffs": [], "history": []}
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            session = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise HTTPException(500, "project agent session is corrupt") from exc
+        if not isinstance(session, dict):
+            raise HTTPException(500, "project agent session is corrupt")
+        # Sessions written before thread history existed remain valid.
+        session.setdefault("threadId", None)
+        session.setdefault("messages", [])
+        session.setdefault("handoffs", [])
+        session.setdefault("history", [])
+        return session
 
     def write_session(project: Path, value: dict) -> None:
         path = session_path(project)
@@ -921,9 +930,22 @@ def serve():
     async def reset_session(name: str):
         project = project_dir(name)
         async with mutation_lock:
-            write_session(project, {"threadId": None, "messages": [], "handoffs": []})
+            session = read_session(project)
+            history = list(session.get("history", []))
+            if session.get("threadId") or session.get("messages"):
+                history.append({
+                    "threadId": session.get("threadId"),
+                    "messages": session.get("messages", []),
+                    "archivedAt": datetime.now(timezone.utc).isoformat(),
+                })
+            write_session(project, {
+                "threadId": None,
+                "messages": [],
+                "handoffs": [],
+                "history": history[-20:],
+            })
             await commit()
-        return {"reset": True}
+        return {"reset": True, "history": history[-20:]}
 
     @api.get("/api/freeq/bots")
     async def list_freeq_bots(server: str = "wss://irc.freeq.at/irc"):
@@ -1643,7 +1665,12 @@ def serve():
                             {"role": "assistant", "text": response_text},
                         ]
                     )
-                    persisted = {"threadId": thread.id, "messages": messages[-100:]}
+                    persisted = {
+                        "threadId": thread.id,
+                        "messages": messages[-100:],
+                        "handoffs": session.get("handoffs", []),
+                        "history": session.get("history", []),
+                    }
                     write_session(project, persisted)
                     await commit()
                 emit({"type": "complete", "messages": persisted["messages"]})

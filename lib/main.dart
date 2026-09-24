@@ -69,6 +69,35 @@ class AgentMessage {
   final String text;
 }
 
+class AgentThreadHistory {
+  const AgentThreadHistory({
+    required this.messages,
+    this.threadId,
+    this.archivedAt,
+  });
+
+  factory AgentThreadHistory.fromJson(Map<String, dynamic> json) =>
+      AgentThreadHistory(
+        threadId: json['threadId'] as String?,
+        archivedAt: json['archivedAt'] as String?,
+        messages: (json['messages'] as List<dynamic>? ?? const [])
+            .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
+            .toList(),
+      );
+
+  final String? threadId;
+  final String? archivedAt;
+  final List<AgentMessage> messages;
+
+  String get title {
+    final prompt = messages
+        .where((message) => message.role == 'user')
+        .firstOrNull;
+    if (prompt == null || prompt.text.trim().isEmpty) return 'Untitled thread';
+    return prompt.text.trim().replaceAll(RegExp(r'\s+'), ' ');
+  }
+}
+
 class FreeqBot {
   const FreeqBot({
     required this.did,
@@ -321,6 +350,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   List<String> _files = const [];
   final Set<String> _expandedDirectories = {};
   List<AgentMessage> _messages = const [];
+  List<AgentThreadHistory> _threadHistory = const [];
   List<Map<String, dynamic>> _freeqHandoffs = const [];
   ProjectSummary? _project;
   String? _path;
@@ -548,6 +578,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _files = const [];
       _expandedDirectories.clear();
       _messages = const [];
+      _threadHistory = const [];
       _freeqHandoffs = const [];
       _agentPanelTab = _AgentPanelTab.chat;
       _loading = true;
@@ -579,6 +610,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     setState(() {
       _messages = (response['messages'] as List<dynamic>? ?? const [])
           .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
+          .toList();
+      _threadHistory = (response['history'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(AgentThreadHistory.fromJson)
+          .toList()
+          .reversed
           .toList();
       _freeqHandoffs = (response['handoffs'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
@@ -898,6 +935,56 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     _ => false,
   };
 
+  void _openExternalUrl(String value) {
+    final uri = Uri.tryParse(value);
+    if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')) {
+      return;
+    }
+    html.window.open(uri.toString(), '_blank');
+  }
+
+  Widget _externalLink(String value, {String? label}) => TextButton.icon(
+    onPressed: () => _openExternalUrl(value),
+    style: TextButton.styleFrom(
+      padding: EdgeInsets.zero,
+      minimumSize: Size.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      alignment: Alignment.centerLeft,
+    ),
+    icon: const Icon(Icons.open_in_new, size: 13),
+    label: Text(
+      label ?? value,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(decoration: TextDecoration.underline),
+    ),
+  );
+
+  Widget _messageText(String value) {
+    final matches = RegExp(r'https?://[^\s<>()]+').allMatches(value).toList();
+    if (matches.isEmpty) return SelectableText(value);
+
+    final parts = <Widget>[];
+    var offset = 0;
+    for (final match in matches) {
+      if (match.start > offset) {
+        parts.add(Text(value.substring(offset, match.start)));
+      }
+      final url = match.group(0)!;
+      final uri = Uri.tryParse(url);
+      parts.add(
+        _externalLink(
+          url,
+          label: uri?.host == 'agentgit.co'
+              ? 'Open AgentGit exchange'
+              : 'Open link',
+        ),
+      );
+      offset = match.end;
+    }
+    if (offset < value.length) parts.add(Text(value.substring(offset)));
+    return Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: parts);
+  }
+
   Widget _buildFreeqHandoffs() {
     final active = _freeqHandoffs
         .where(
@@ -960,6 +1047,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             final botName =
                 handoff['botName']?.toString() ?? 'Open channel offer';
             final note = handoff['note']?.toString().trim() ?? '';
+            final exchangeUrl = handoff['exchangeUrl']?.toString() ?? '';
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Container(
@@ -1013,6 +1101,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
+                    if (exchangeUrl.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      _externalLink(exchangeUrl, label: 'Open AgentGit review'),
+                    ],
                   ],
                 ),
               ),
@@ -1048,10 +1140,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                       ],
                     ),
                     if (exchangeUrl.isNotEmpty)
-                      SelectableText(
-                        'AgentGit review: $exchangeUrl',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
+                      _externalLink(exchangeUrl, label: 'Open AgentGit review'),
                     if (canReview)
                       Align(
                         alignment: Alignment.centerLeft,
@@ -1756,6 +1845,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _savedText = '';
       _files = const [];
       _messages = const [];
+      _threadHistory = const [];
       _error = null;
     });
   }
@@ -1948,11 +2038,101 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (!confirmed) return;
     try {
       await _request('DELETE', _projectUrl('/session'));
-      if (mounted) setState(() => _messages = const []);
+      await _loadSession();
     } catch (error) {
       _showError(error);
     }
   }
+
+  Future<void> _showThreadHistory() async {
+    if (_project == null) return;
+    await _loadSession();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Previous work threads'),
+        content: SizedBox(
+          width: 520,
+          child: _threadHistory.isEmpty
+              ? const Text('No previous threads for this project yet.')
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _threadHistory.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final thread = _threadHistory[index];
+                    final timestamp = DateTime.tryParse(
+                      thread.archivedAt ?? '',
+                    );
+                    final date = timestamp == null
+                        ? 'Saved work thread'
+                        : 'Saved ${timestamp.toLocal().toString().substring(0, 16)}';
+                    return ListTile(
+                      title: Text(
+                        thread.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '$date · ${thread.messages.length} messages',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => _showHistoricalThread(thread),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showHistoricalThread(
+    AgentThreadHistory thread,
+  ) => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(thread.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      content: SizedBox(
+        width: 560,
+        height: 480,
+        child: ListView.separated(
+          itemCount: thread.messages.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 10),
+          itemBuilder: (context, index) {
+            final message = thread.messages[index];
+            final user = message.role == 'user';
+            return Align(
+              alignment: user ? Alignment.centerRight : Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: user
+                      ? const Color(0xFF263659)
+                      : const Color(0xFF161B22),
+                  border: Border.all(color: const Color(0xFF30363D)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: _messageText(message.text),
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Back'),
+        ),
+      ],
+    ),
+  );
 
   void _openTerminal() {
     final project = _project;
@@ -2735,6 +2915,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           onPressed: _resetAgent,
           icon: const Icon(Icons.add_comment_outlined, size: 18),
         ),
+        IconButton(
+          tooltip: 'Show previous work threads',
+          visualDensity: VisualDensity.compact,
+          onPressed: _agentBusy ? null : _showThreadHistory,
+          icon: const Icon(Icons.history_outlined, size: 18),
+        ),
       ]),
       _buildAgentTabs(),
       Expanded(
@@ -2891,7 +3077,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                 ),
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: SelectableText(_streamedResponse),
+                              child: _messageText(_streamedResponse),
                             ),
                           ],
                         ],
@@ -2915,7 +3101,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         border: Border.all(color: const Color(0xFF30363D)),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: SelectableText(message.text),
+                      child: _messageText(message.text),
                     ),
                   );
                 },
