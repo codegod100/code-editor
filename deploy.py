@@ -1331,6 +1331,60 @@ def serve():
             await commit()
         return session
 
+    @api.post("/api/projects/{name}/workthreads")
+    async def create_work_thread(name: str, request: Request):
+        project = project_dir(name)
+        if not (project / ".git").exists():
+            raise HTTPException(400, "work threads require a Git repository")
+        body = await request.json()
+        thread_name = str(body.get("name", "")).strip()
+        if not thread_name:
+            raise HTTPException(400, "work thread name is required")
+        if len(thread_name) > 100:
+            raise HTTPException(400, "work thread name must be 100 characters or fewer")
+        async with mutation_lock:
+            for _ in range(10):
+                suffix = secrets.token_hex(4)
+                workspace_name = f"{name}-work-thread-{suffix}"
+                branch = f"codex/work-thread-{suffix}"
+                destination = root / workspace_name
+                if not destination.exists():
+                    break
+            else:
+                raise HTTPException(409, "could not allocate a unique worktree name")
+            result = await asyncio.to_thread(
+                git_result,
+                project,
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                str(destination),
+                "HEAD",
+                timeout=120,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not create work thread"))
+            now = datetime.now(timezone.utc).isoformat()
+            thread_id = os.urandom(8).hex()
+            write_session(destination, {
+                "activeThreadId": thread_id,
+                "threads": [{
+                    "id": thread_id,
+                    "title": thread_name,
+                    "threadId": None,
+                    "messages": [],
+                    "createdAt": now,
+                    "updatedAt": now,
+                }],
+                "threadId": None,
+                "messages": [],
+                "handoffs": [],
+                "history": [],
+            })
+            await commit()
+        return {"name": workspace_name, "branch": branch, "startPoint": "HEAD"}
+
     @api.delete("/api/projects/{name}/session/{thread_id}")
     async def archive_session_thread(name: str, thread_id: str):
         project = project_dir(name)
