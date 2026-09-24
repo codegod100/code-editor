@@ -138,7 +138,7 @@ image = (
     modal.Image.from_registry(
         "ghcr.io/cirruslabs/flutter:stable", add_python="3.12"
     )
-    .apt_install("bash", "curl", "fish", "git", "gh")
+    .apt_install("acl", "bash", "curl", "fish", "git", "gh", "sudo")
     .pip_install(
         "fastapi[standard]==0.121.3",
         "itsdangerous==2.2.0",
@@ -155,6 +155,8 @@ image = (
     .add_local_dir(".", remote_path="/app", copy=True)
     .workdir("/app")
     .run_commands(
+        "useradd --create-home --shell /usr/bin/fish coder",
+        "printf 'coder ALL=(ALL) NOPASSWD: ALL\\n' > /etc/sudoers.d/coder && chmod 0440 /etc/sudoers.d/coder",
         "curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && apt-get install -y nodejs",
         "npm --prefix /app/freeq-handoff install --omit=dev",
         "npm ci",
@@ -1953,6 +1955,21 @@ def serve():
         if session is None or session["process"].poll() is not None:
             if session is not None:
                 await asyncio.to_thread(stop_terminal_session, session)
+            # The API process remains root so it can manage the mounted Volume,
+            # but interactive commands should not start with unrestricted root
+            # privileges.  ACLs let the terminal account edit existing content
+            # and make that access inherit to files the API creates later.
+            subprocess.run(
+                ["setfacl", "--recursive", "--modify", "u:coder:rwX", str(project)],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "find", str(project), "-type", "d", "-exec",
+                    "setfacl", "--modify", "d:u:coder:rwx", "{}", "+",
+                ],
+                check=True,
+            )
             master_fd, slave_fd = pty.openpty()
             environment = os.environ.copy()
             environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
@@ -1963,6 +1980,7 @@ def serve():
                 # non-interactive parent shell as well as in Popen so the interactive
                 # shell inherits the selected project directory deterministically.
                 [
+                    "sudo", "--set-home", "--user", "coder", "--",
                     "bash", "--noprofile", "--norc", "-c",
                     'cd -- "$1" || exit 1\nexec fish -i',
                     "bash", str(project),
