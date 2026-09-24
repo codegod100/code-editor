@@ -267,11 +267,331 @@ def serve():
 
     @api.get("/auth/login")
     async def login():
-        return HTMLResponse("""<!doctype html><title>Sign in with AT Protocol</title>
-        <form action='/auth/authorize' method='get'>
-          <label>AT Protocol handle <input name='identity' required autofocus placeholder='you.bsky.social'></label>
-          <button type='submit'>Continue</button>
-        </form>""")
+        return HTMLResponse("""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="description" content="Sign in to Codex Workspace with your AT Protocol account.">
+  <title>Sign in · Codex Workspace</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d1117;
+      color: #f0f6fc;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      min-height: 100svh;
+      background:
+        radial-gradient(circle at 50% -18%, rgba(124, 156, 255, .18), transparent 42rem),
+        #0d1117;
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      content: "";
+      opacity: .22;
+      background-image:
+        linear-gradient(rgba(139, 148, 158, .08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(139, 148, 158, .08) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: linear-gradient(to bottom, black, transparent 76%);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100vh;
+      min-height: 100svh;
+      padding: max(20px, env(safe-area-inset-top))
+        max(24px, env(safe-area-inset-right))
+        max(20px, env(safe-area-inset-bottom))
+        max(24px, env(safe-area-inset-left));
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      width: fit-content;
+      color: #f0f6fc;
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -.01em;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border: 1px solid #3f4d68;
+      border-radius: 9px;
+      background: linear-gradient(145deg, #263659, #161b22);
+      color: #a9bdff;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .22);
+    }
+
+    main {
+      display: grid;
+      place-items: center;
+      padding: 48px 0;
+    }
+
+    .card {
+      width: min(100%, 440px);
+      padding: 36px;
+      border: 1px solid #30363d;
+      border-radius: 16px;
+      background: rgba(22, 27, 34, .94);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .38);
+      backdrop-filter: blur(12px);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0 0 20px;
+      color: #a9bdff;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #7c9cff;
+      box-shadow: 0 0 0 4px rgba(124, 156, 255, .12);
+      content: "";
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 7vw, 36px);
+      line-height: 1.12;
+      letter-spacing: -.035em;
+    }
+
+    .intro {
+      margin: 14px 0 28px;
+      color: #8b949e;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #c9d1d9;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .field {
+      position: relative;
+    }
+
+    .at-sign {
+      position: absolute;
+      top: 50%;
+      left: 14px;
+      color: #8b949e;
+      font-size: 16px;
+      transform: translateY(-52%);
+      pointer-events: none;
+    }
+
+    input {
+      width: 100%;
+      min-height: 48px;
+      padding: 0 14px 0 38px;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      outline: none;
+      background: #0d1117;
+      color: #f0f6fc;
+      font: inherit;
+      transition: border-color 150ms ease, box-shadow 150ms ease;
+    }
+
+    input::placeholder { color: #6e7681; }
+
+    input:hover { border-color: #484f58; }
+
+    input:focus {
+      border-color: #7c9cff;
+      box-shadow: 0 0 0 3px rgba(124, 156, 255, .2);
+    }
+
+    .hint {
+      margin: 8px 0 0;
+      color: #6e7681;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 48px;
+      margin-top: 24px;
+      padding: 0 18px;
+      border: 1px solid #8fa9ff;
+      border-radius: 8px;
+      background: #7c9cff;
+      color: #071023;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(51, 82, 171, .22);
+      transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+    }
+
+    button:hover {
+      background: #91aaff;
+      box-shadow: 0 10px 28px rgba(51, 82, 171, .3);
+      transform: translateY(-1px);
+    }
+
+    button:active { transform: translateY(0); }
+
+    button:focus-visible {
+      outline: 3px solid rgba(169, 189, 255, .38);
+      outline-offset: 3px;
+    }
+
+    .privacy {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin: 24px 0 0;
+      padding-top: 20px;
+      border-top: 1px solid #30363d;
+      color: #8b949e;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .privacy svg { flex: 0 0 auto; margin-top: 1px; color: #7d8590; }
+
+    footer {
+      color: #6e7681;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 560px) {
+      .shell {
+        padding-right: 16px;
+        padding-left: 16px;
+      }
+
+      main { padding: 32px 0; }
+
+      .card {
+        padding: 26px 22px;
+        border-radius: 14px;
+      }
+
+      .brand { font-size: 14px; }
+    }
+
+    @media (max-height: 620px) and (orientation: landscape) {
+      main { padding: 20px 0; }
+      .card { padding: 24px; }
+      .intro { margin-bottom: 20px; }
+      .privacy { margin-top: 18px; padding-top: 16px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="brand" aria-label="Codex Workspace">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+          <path d="m12 2 1.45 5.55L19 9l-5.55 1.45L12 16l-1.45-5.55L5 9l5.55-1.45L12 2Z" fill="currentColor"/>
+          <path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z" fill="currentColor" opacity=".72"/>
+        </svg>
+      </span>
+      <span>Codex Workspace</span>
+    </header>
+
+    <main>
+      <section class="card" aria-labelledby="sign-in-title">
+        <p class="eyebrow">Secure workspace access</p>
+        <h1 id="sign-in-title">Welcome back</h1>
+        <p class="intro">Sign in with your AT Protocol identity to open your projects and continue working.</p>
+
+        <form action="/auth/authorize" method="get">
+          <label for="identity">AT Protocol handle</label>
+          <div class="field">
+            <span class="at-sign" aria-hidden="true">@</span>
+            <input
+              id="identity"
+              name="identity"
+              type="text"
+              required
+              autofocus
+              autocomplete="username"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck="false"
+              inputmode="url"
+              enterkeyhint="go"
+              placeholder="you.bsky.social"
+              aria-describedby="identity-hint"
+            >
+          </div>
+          <p class="hint" id="identity-hint">Use your Bluesky handle or another AT Protocol handle.</p>
+
+          <button type="submit">
+            Continue
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M4 10h12m-5-5 5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </form>
+
+        <p class="privacy">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="4" y="8" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M6.5 8V6.5a3.5 3.5 0 0 1 7 0V8" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+          <span>You’ll continue to your identity provider to approve access. We use your handle only to identify your workspace session.</span>
+        </p>
+      </section>
+    </main>
+
+    <footer>Cloud Code Editor</footer>
+  </div>
+</body>
+</html>""")
 
     @api.get("/auth/authorize")
     async def authorize(identity: str, request: Request):
