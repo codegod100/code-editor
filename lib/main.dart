@@ -609,7 +609,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 )
                 .toList();
           });
-          if ({'complete', 'fail', 'decline', 'timeout'}.contains(update['status'])) {
+          if ({'incorporating', 'complete', 'fail', 'decline', 'timeout'}
+              .contains(update['status'])) {
             await _loadSession();
           }
         } catch (_) {
