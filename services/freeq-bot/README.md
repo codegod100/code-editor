@@ -55,3 +55,21 @@ fly logs
 After startup, logs must include a joined #tasks line and a ready line naming
 caps=prime_agent. An editor handoff with any other capability is deliberately
 left unclaimed.
+
+## Provider probe
+
+After deploying this version, distinguish a transient provider rejection from a
+persistent one by signaling the deployed worker:
+
+~~~sh
+fly ssh console -a freeq-bot -C "kill -USR1 \$(pgrep -f '^/usr/local/bin/node .*src/bot.ts$')"
+fly logs -a freeq-bot --no-tail
+~~~
+
+It calls the same configured Modal `run_task` function as a handoff with a
+minimal deterministic prompt. A successful result has
+`[healthcheck] provider-accepted-request`; a 429 has
+`[healthcheck] provider-rate-limited`. This is a real agent request and may
+incur the normal task cost, so it is intentionally not a scheduled health
+check. The probe runs in the existing worker process; do not launch a second
+Node process on this 256 MiB machine.

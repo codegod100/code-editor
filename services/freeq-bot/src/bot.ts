@@ -83,6 +83,7 @@ bot.on("authError", (error) => {
 
 const maxOfferAgeMs = integerEnv("MAX_OFFER_AGE_MS", 120_000);
 const claimed = new Set<string>();
+let providerProbeRunning = false;
 
 function integerEnv(key: string, fallback: number): number {
   const raw = process.env[key];
@@ -159,6 +160,46 @@ bot.on("actEvent", async (event) => {
     capacity.release();
     if (capacity.inFlight === 0) bot.setState("idle");
   }
+});
+
+/**
+ * An operator sends SIGUSR1 through Fly SSH to test the exact provider path
+ * without starting a second Node process on this 256 MiB worker.
+ */
+process.on("SIGUSR1", () => {
+  if (providerProbeRunning) {
+    console.error("[healthcheck] ignored: provider probe already running");
+    return;
+  }
+  if (capacity.full) {
+    console.error("[healthcheck] unavailable: worker is at task capacity");
+    return;
+  }
+
+  providerProbeRunning = true;
+  capacity.acquire();
+  console.error("[healthcheck] started");
+  void runTask("Reply with exactly: health check ok", {
+    onProgress: (note) => console.error("[healthcheck] " + note),
+  })
+    .then((result) => {
+      if (!result.text) throw new Error("prime-agent completed without an answer");
+      console.error(
+        "[healthcheck] provider-accepted-request " +
+          JSON.stringify({ sandboxId: result.sandboxId, elapsedMs: result.elapsedMs, answer: result.text }),
+      );
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = /\b429\b|rate.?limit|too many requests/i.test(message)
+        ? "provider-rate-limited"
+        : "task-dispatch-failed";
+      console.error("[healthcheck] " + status + " " + message);
+    })
+    .finally(() => {
+      capacity.release();
+      providerProbeRunning = false;
+    });
 });
 
 await bot.start();
