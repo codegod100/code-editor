@@ -2789,9 +2789,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ? _pushChanges
         : null;
     final primaryLabel = status.changedCount > 0
-        ? 'Commit ${status.changedCount}'
+        ? 'Commit ${status.changedCount} ${status.changedCount == 1 ? 'change' : 'changes'}'
         : status.ahead > 0
-        ? 'Push ${status.ahead}'
+        ? 'Push ${status.ahead} ${status.ahead == 1 ? 'commit' : 'commits'}'
         : 'Up to date';
     return Container(
       constraints: const BoxConstraints(maxHeight: 230),
@@ -2808,9 +2808,22 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 const Icon(Icons.account_tree_outlined, size: 17),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    status.branch.isEmpty ? 'Detached HEAD' : status.branch,
-                    style: Theme.of(context).textTheme.labelLarge,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'SOURCE CONTROL',
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                      Text(
+                        status.branch.isEmpty
+                            ? 'Detached HEAD'
+                            : 'Branch: ${status.branch}',
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ],
                   ),
                 ),
                 if (status.behind > 0)
@@ -2871,7 +2884,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  tooltip: 'Create pull request',
+                  tooltip: 'Create a pull request after pushing this branch',
+                  semanticLabel: 'Create pull request',
                   onPressed:
                       _gitBusy ||
                           !status.hasRemote ||
@@ -2884,6 +2898,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 ),
                 IconButton(
                   tooltip: 'Enable auto-merge for this branch\'s pull request',
+                  semanticLabel: 'Enable pull request auto-merge',
                   onPressed:
                       _gitBusy ||
                           !status.hasRemote ||
