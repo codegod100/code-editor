@@ -940,7 +940,7 @@ def serve():
                         session = read_session(project)
                         for saved in session.get("handoffs", []):
                             if saved.get("taskId") == task_id:
-                                saved.update({"status": "claimed", "botName": actor})
+                                saved.update({"status": "claimed", "botName": actor, "note": note})
                         write_session(project, session)
                         await commit()
                     continue

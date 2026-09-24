@@ -829,6 +829,107 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
+  String _freeqStatusLabel(String status) => switch (status) {
+    'offered' => 'Waiting for a bot',
+    'claimed' || 'accepted' => 'Claimed',
+    'incorporating' => 'Adding result to this thread',
+    'waiting_to_incorporate' => 'Waiting to add result',
+    'complete' => 'Completed',
+    'fail' => 'Failed',
+    'decline' => 'Declined',
+    'timeout' => 'Timed out',
+    _ => status.replaceAll('_', ' '),
+  };
+
+  IconData _freeqStatusIcon(String status) => switch (status) {
+    'offered' => Icons.schedule_outlined,
+    'claimed' || 'accepted' => Icons.person_pin_circle_outlined,
+    'incorporating' || 'waiting_to_incorporate' => Icons.sync_outlined,
+    'complete' => Icons.check_circle_outline,
+    'fail' || 'decline' || 'timeout' => Icons.error_outline,
+    _ => Icons.hub_outlined,
+  };
+
+  Color _freeqStatusColor(String status) => switch (status) {
+    'claimed' || 'accepted' => const Color(0xFF79C0FF),
+    'incorporating' || 'waiting_to_incorporate' => const Color(0xFFD2A8FF),
+    'complete' => const Color(0xFF7EE787),
+    'fail' || 'decline' || 'timeout' => const Color(0xFFFF7B72),
+    _ => const Color(0xFFE3B341),
+  };
+
+  Widget _buildFreeqHandoffs() => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('FREEQ HANDOFFS', style: Theme.of(context).textTheme.labelSmall),
+        const SizedBox(height: 6),
+        ..._freeqHandoffs.map((handoff) {
+          final status = handoff['status']?.toString() ?? 'offered';
+          final color = _freeqStatusColor(status);
+          final title = handoff['title']?.toString() ?? 'FreeQ handoff';
+          final botName = handoff['botName']?.toString() ?? 'Open channel offer';
+          final note = handoff['note']?.toString().trim() ?? '';
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFF161B22),
+                border: Border.all(color: const Color(0xFF30363D)),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(_freeqStatusIcon(status), size: 16, color: color),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _freeqStatusLabel(status),
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    status == 'offered'
+                        ? 'Open offer in ${handoff['channel'] ?? 'FreeQ'}'
+                        : 'Handled by $botName',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (note.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(note, style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    ),
+  );
+
   Iterable<String> _parentDirectories(String path) sync* {
     final segments = path.split('/');
     for (var index = 1; index < segments.length; index++) {
@@ -2374,31 +2475,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         child: Column(
           children: [
             if (_gitStatus?.isRepo == true) _buildSourceControl(),
-            if (_freeqHandoffs.isNotEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
-                ),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: _freeqHandoffs.map((handoff) {
-                    final status = handoff['status']?.toString() ?? 'offered';
-                    return Chip(
-                      avatar: const Icon(Icons.hub_outlined, size: 15),
-                      label: Text(
-                        '${handoff['botName'] ?? 'FreeQ bot'}: $status',
-                      ),
-                      visualDensity: VisualDensity.compact,
-                    );
-                  }).toList(),
-                ),
-              ),
+            if (_freeqHandoffs.isNotEmpty) _buildFreeqHandoffs(),
             Expanded(
               child: _messages.isEmpty
                   ? Padding(
