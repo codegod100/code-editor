@@ -305,6 +305,8 @@ class WorkspaceScreen extends StatefulWidget {
   State<WorkspaceScreen> createState() => _WorkspaceScreenState();
 }
 
+enum _AgentPanelTab { chat, sourceControl, freeq }
+
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
   static const _lastProjectStorageKey = 'cloud-code-editor.last-project';
   static const _lastFreeqCapabilityStorageKey =
@@ -329,6 +331,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _agentBusy = false;
   bool _agentStopping = false;
   bool _showCompletedHandoffs = false;
+  _AgentPanelTab _agentPanelTab = _AgentPanelTab.chat;
   List<String> _agentActivity = const [];
   String _streamedResponse = '';
   bool _codexConnected = false;
@@ -545,6 +548,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _expandedDirectories.clear();
       _messages = const [];
       _freeqHandoffs = const [];
+      _agentPanelTab = _AgentPanelTab.chat;
       _loading = true;
       _error = null;
     });
@@ -805,6 +809,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       if (!mounted) return;
       setState(() {
         _freeqHandoffs = [..._freeqHandoffs, handoff];
+        _agentPanelTab = _AgentPanelTab.freeq;
         _messages = [
           ..._messages,
           AgentMessage(
@@ -903,12 +908,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         )
         .toList();
 
-    return Container(
-      width: double.infinity,
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2618,134 +2619,187 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           icon: const Icon(Icons.add_comment_outlined, size: 18),
         ),
       ]),
+      _buildAgentTabs(),
       Expanded(
-        child: Column(
-          children: [
-            if (_gitStatus?.isRepo == true) _buildSourceControl(),
-            if (_freeqHandoffs.isNotEmpty) _buildFreeqHandoffs(),
-            Expanded(
-              child: _messages.isEmpty
-                  ? Padding(
-                      padding: const EdgeInsets.all(24),
+        child: switch (_agentPanelTab) {
+          _AgentPanelTab.chat => _buildAgentConversation(),
+          _AgentPanelTab.sourceControl =>
+            _gitStatus?.isRepo == true
+                ? _buildSourceControl()
+                : const Center(child: Text('Source control is not available')),
+          _AgentPanelTab.freeq => _buildFreeqHandoffs(),
+        },
+      ),
+    ],
+  );
+
+  Widget _buildAgentTabs() {
+    final tabs = <(_AgentPanelTab, String, IconData)>[
+      (_AgentPanelTab.chat, 'Chat', Icons.forum_outlined),
+      if (_gitStatus?.isRepo == true)
+        (
+          _AgentPanelTab.sourceControl,
+          'Source Control',
+          Icons.account_tree_outlined,
+        ),
+      (_AgentPanelTab.freeq, 'FreeQ', Icons.hub_outlined),
+    ];
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
+      ),
+      child: Row(
+        children: tabs.map((tab) {
+          final selected = _agentPanelTab == tab.$1;
+          return Expanded(
+            child: Semantics(
+              button: true,
+              selected: selected,
+              label: '${tab.$2} tab',
+              child: TextButton.icon(
+                onPressed: () => setState(() => _agentPanelTab = tab.$1),
+                icon: Icon(tab.$3, size: 16),
+                label: Text(tab.$2, overflow: TextOverflow.ellipsis),
+                style: TextButton.styleFrom(
+                  foregroundColor: selected
+                      ? const Color(0xFFB6C8FF)
+                      : const Color(0xFF8B949E),
+                  backgroundColor: selected
+                      ? const Color(0xFF1F2A44)
+                      : Colors.transparent,
+                  shape: const RoundedRectangleBorder(),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 12,
+                    horizontal: 4,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildAgentConversation() => Column(
+    children: [
+      Expanded(
+        child: _messages.isEmpty
+            ? Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.auto_awesome_outlined, size: 42),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Ask Codex to work in ${_project?.name}',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'It can inspect the repository, edit files, and run checks inside this project.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              )
+            : ListView.builder(
+                controller: _messagesScroll,
+                padding: const EdgeInsets.all(12),
+                itemCount: _messages.length + (_agentBusy ? 1 : 0),
+                itemBuilder: (context, index) {
+                  if (index == _messages.length) {
+                    return Padding(
+                      padding: EdgeInsets.all(12),
                       child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.auto_awesome_outlined, size: 42),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Ask Codex to work in ${_project?.name}',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.titleMedium,
+                          Row(
+                            children: [
+                              SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 10),
+                              Text(
+                                _agentStopping
+                                    ? 'Stopping Codex…'
+                                    : 'Codex is working…',
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'It can inspect the repository, edit files, and run checks inside this project.',
-                            textAlign: TextAlign.center,
-                          ),
+                          if (_agentActivity.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF161B22),
+                                border: Border.all(
+                                  color: const Color(0xFF30363D),
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: _agentActivity
+                                    .map(
+                                      (activity) => Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 4,
+                                        ),
+                                        child: Text('• $activity'),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ),
+                          ],
+                          if (_streamedResponse.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF161B22),
+                                border: Border.all(
+                                  color: const Color(0xFF30363D),
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: SelectableText(_streamedResponse),
+                            ),
+                          ],
                         ],
                       ),
-                    )
-                  : ListView.builder(
-                      controller: _messagesScroll,
+                    );
+                  }
+                  final message = _messages[index];
+                  final user = message.role == 'user';
+                  return Align(
+                    alignment: user
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 340),
+                      margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(12),
-                      itemCount: _messages.length + (_agentBusy ? 1 : 0),
-                      itemBuilder: (context, index) {
-                        if (index == _messages.length) {
-                          return Padding(
-                            padding: EdgeInsets.all(12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    SizedBox.square(
-                                      dimension: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    ),
-                                    SizedBox(width: 10),
-                                    Text(
-                                      _agentStopping
-                                          ? 'Stopping Codex…'
-                                          : 'Codex is working…',
-                                    ),
-                                  ],
-                                ),
-                                if (_agentActivity.isNotEmpty) ...[
-                                  const SizedBox(height: 10),
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF161B22),
-                                      border: Border.all(
-                                        color: const Color(0xFF30363D),
-                                      ),
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: _agentActivity
-                                          .map(
-                                            (activity) => Padding(
-                                              padding: const EdgeInsets.only(
-                                                bottom: 4,
-                                              ),
-                                              child: Text('• $activity'),
-                                            ),
-                                          )
-                                          .toList(),
-                                    ),
-                                  ),
-                                ],
-                                if (_streamedResponse.isNotEmpty) ...[
-                                  const SizedBox(height: 10),
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF161B22),
-                                      border: Border.all(
-                                        color: const Color(0xFF30363D),
-                                      ),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: SelectableText(_streamedResponse),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          );
-                        }
-                        final message = _messages[index];
-                        final user = message.role == 'user';
-                        return Align(
-                          alignment: user
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            constraints: const BoxConstraints(maxWidth: 340),
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: user
-                                  ? const Color(0xFF263659)
-                                  : const Color(0xFF161B22),
-                              border: Border.all(
-                                color: const Color(0xFF30363D),
-                              ),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: SelectableText(message.text),
-                          ),
-                        );
-                      },
+                      decoration: BoxDecoration(
+                        color: user
+                            ? const Color(0xFF263659)
+                            : const Color(0xFF161B22),
+                        border: Border.all(color: const Color(0xFF30363D)),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: SelectableText(message.text),
                     ),
-            ),
-          ],
-        ),
+                  );
+                },
+              ),
       ),
       Container(
         padding: const EdgeInsets.all(12),
@@ -2822,124 +2876,117 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         : status.ahead > 0
         ? 'Push ${status.ahead} ${status.ahead == 1 ? 'commit' : 'commits'}'
         : 'Up to date';
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 230),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
-            child: Row(
-              children: [
-                const Icon(Icons.account_tree_outlined, size: 17),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'SOURCE CONTROL',
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                      Text(
-                        status.branch.isEmpty
-                            ? 'Detached HEAD'
-                            : 'Branch: ${status.branch}',
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                    ],
-                  ),
-                ),
-                if (status.behind > 0)
-                  Text(
-                    '↓${status.behind}',
-                    style: const TextStyle(color: Color(0xFFE3B341)),
-                  ),
-                if (status.ahead > 0)
-                  Text(
-                    ' ↑${status.ahead}',
-                    style: const TextStyle(color: Color(0xFF7EE787)),
-                  ),
-              ],
-            ),
-          ),
-          if (status.files.isNotEmpty)
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: status.files.length,
-                itemBuilder: (context, index) {
-                  final change = status.files[index];
-                  return ListTile(
-                    dense: true,
-                    visualDensity: VisualDensity.compact,
-                    leading: Text(
-                      change.label.substring(0, 1),
-                      style: const TextStyle(color: Color(0xFFE3B341)),
-                    ),
-                    title: Text(
-                      change.path,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    trailing: Text(
-                      change.label,
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
+          child: Row(
+            children: [
+              const Icon(Icons.account_tree_outlined, size: 17),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'SOURCE CONTROL',
                       style: Theme.of(context).textTheme.labelSmall,
                     ),
-                  );
-                },
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: _gitBusy ? null : primary,
-                    icon: Icon(
-                      status.changedCount > 0
-                          ? Icons.commit
-                          : Icons.cloud_upload_outlined,
-                      size: 17,
+                    Text(
+                      status.branch.isEmpty
+                          ? 'Detached HEAD'
+                          : 'Branch: ${status.branch}',
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelLarge,
                     ),
-                    label: Text(primaryLabel),
-                  ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: 'Create a pull request after pushing this branch',
-                  onPressed:
-                      _gitBusy ||
-                          !status.hasRemote ||
-                          !status.prAvailable ||
-                          status.changedCount > 0 ||
-                          status.ahead == 0
-                      ? null
-                      : _createPullRequest,
-                  icon: const Icon(Icons.call_merge_outlined, size: 19),
+              ),
+              if (status.behind > 0)
+                Text(
+                  '↓${status.behind}',
+                  style: const TextStyle(color: Color(0xFFE3B341)),
                 ),
-                IconButton(
-                  tooltip: 'Enable auto-merge for this branch\'s pull request',
-                  onPressed:
-                      _gitBusy ||
-                          !status.hasRemote ||
-                          !status.prAvailable ||
-                          status.changedCount > 0
-                      ? null
-                      : _enableAutoMerge,
-                  icon: const Icon(Icons.merge_type_outlined, size: 19),
+              if (status.ahead > 0)
+                Text(
+                  ' ↑${status.ahead}',
+                  style: const TextStyle(color: Color(0xFF7EE787)),
                 ),
-              ],
-            ),
+            ],
           ),
-        ],
-      ),
+        ),
+        Expanded(
+          child: status.files.isEmpty
+              ? const Center(child: Text('No uncommitted changes'))
+              : ListView.builder(
+                  itemCount: status.files.length,
+                  itemBuilder: (context, index) {
+                    final change = status.files[index];
+                    return ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      leading: Text(
+                        change.label.substring(0, 1),
+                        style: const TextStyle(color: Color(0xFFE3B341)),
+                      ),
+                      title: Text(
+                        change.path,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      trailing: Text(
+                        change.label,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    );
+                  },
+                ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _gitBusy ? null : primary,
+                  icon: Icon(
+                    status.changedCount > 0
+                        ? Icons.commit
+                        : Icons.cloud_upload_outlined,
+                    size: 17,
+                  ),
+                  label: Text(primaryLabel),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: 'Create a pull request after pushing this branch',
+                onPressed:
+                    _gitBusy ||
+                        !status.hasRemote ||
+                        !status.prAvailable ||
+                        status.changedCount > 0 ||
+                        status.ahead == 0
+                    ? null
+                    : _createPullRequest,
+                icon: const Icon(Icons.call_merge_outlined, size: 19),
+              ),
+              IconButton(
+                tooltip: 'Enable auto-merge for this branch\'s pull request',
+                onPressed:
+                    _gitBusy ||
+                        !status.hasRemote ||
+                        !status.prAvailable ||
+                        status.changedCount > 0
+                    ? null
+                    : _enableAutoMerge,
+                icon: const Icon(Icons.merge_type_outlined, size: 19),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
