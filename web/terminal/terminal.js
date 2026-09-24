@@ -38,10 +38,19 @@ socket.addEventListener('open', () => {
   terminal.focus();
 });
 socket.addEventListener('message', (event) => {
+  // `Terminal.write` follows new output to the bottom. Keep the reader's
+  // place in scrollback instead when they have intentionally scrolled up.
+  const viewportY = terminal.getViewportY();
+  const scrollbackLength = terminal.getScrollbackLength();
+
   if (typeof event.data === 'string') {
     terminal.write(event.data);
   } else {
     terminal.write(decoder.decode(event.data, { stream: true }));
+  }
+
+  if (viewportY > 0) {
+    terminal.scrollToLine(viewportY + terminal.getScrollbackLength() - scrollbackLength);
   }
 });
 socket.addEventListener('close', (event) => {
