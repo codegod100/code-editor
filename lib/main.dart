@@ -514,6 +514,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   GitStatus? _gitStatus;
   bool _gitBusy = false;
   bool _gitSyncRequired = false;
+  bool _gitRebaseConflict = false;
   bool _diffBusy = false;
   String _userName = '';
   String _userEmail = '';
@@ -811,6 +812,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _freeqHandoffs = const [];
       _agentPanelTab = _AgentPanelTab.chat;
       _gitSyncRequired = false;
+      _gitRebaseConflict = false;
       _loading = true;
       _error = null;
     });
@@ -1495,7 +1497,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (_project == null) return;
     try {
       final response = await _request('GET', _projectUrl('/git/status'));
-      if (mounted) setState(() => _gitStatus = GitStatus.fromJson(response));
+      final status = GitStatus.fromJson(response);
+      if (mounted) {
+        setState(() {
+          _gitStatus = status;
+          if (status.behind == 0) {
+            _gitSyncRequired = false;
+            _gitRebaseConflict = false;
+          }
+        });
+      }
     } catch (error) {
       if (mounted) setState(() => _gitStatus = null);
     }
@@ -1728,6 +1739,44 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
+  Future<void> _resolveGitConflictWithCodex() async {
+    if (!_gitRebaseConflict || _agentBusy) return;
+    if (!_codexConnected) {
+      _showError('Connect Codex before asking it to resolve a rebase conflict.');
+      return;
+    }
+    if (_dirty) {
+      _showError('Save the open file before asking Codex to resolve the conflict.');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Resolve rebase conflict with Codex?'),
+        content: const Text(
+          'Codex will inspect both versions and reconcile the conflict. It will not discard either side, skip commits, reset the branch, or force-push.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Ask Codex'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _agentPanelTab = _AgentPanelTab.chat;
+      _agentPrompt.text =
+          'Resolve the Git rebase conflict blocking source-control sync. Start by inspecting git status, log, and the relevant diffs. Run git pull --rebase; if it conflicts, manually reconcile every conflict to preserve the intent of both the local and remote commits. Do not use --ours, --theirs, --skip, reset, or force-push. Stage resolved files and run git rebase --continue. Run proportionate checks and git status when finished. If the intended resolution is ambiguous, stop and report the evidence without discarding changes.';
+    });
+    await _runAgent();
+  }
+
   Future<void> _createPullRequest() async {
     Map<String, dynamic> draft;
     try {
@@ -1858,12 +1907,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         return;
       }
       _gitSyncRequired = false;
+      _gitRebaseConflict = false;
       await _refreshGitStatus();
       if (response['url'] is String && mounted) {
         _showError('$success: ${response['url']}');
       }
     } on _ApiException catch (error) {
-      if (error.code == 'remote_ahead' && mounted) {
+      if ((error.code == 'remote_ahead' || error.code == 'rebase_conflict') &&
+          mounted) {
         final status = error.data['status'];
         setState(() {
           _gitSyncRequired = true;
@@ -1872,7 +1923,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           }
         });
       }
-      _showError(error);
+      if (error.code == 'rebase_conflict' && mounted) {
+        setState(() => _gitRebaseConflict = true);
+        final files = error.data['conflictingFiles'];
+        final conflictFiles = files is List && files.isNotEmpty
+            ? '\nConflicting files: ${files.join(', ')}'
+            : '';
+        _showError('${error.message}$conflictFiles');
+      } else {
+        _showError(error);
+      }
     } catch (error) {
       _showError(error);
     } finally {
@@ -4093,29 +4153,46 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-          child: Row(
+          child: Column(
             children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _gitBusy ? null : primary,
-                  icon: _gitBusy
-                      ? const SizedBox(
-                          width: 17,
-                          height: 17,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(
-                          switch (state) {
-                            _GitPrimaryState.commit => Icons.commit,
-                            _GitPrimaryState.sync => Icons.sync,
-                            _GitPrimaryState.createPullRequest =>
-                              Icons.call_merge_outlined,
-                            _ => Icons.cloud_upload_outlined,
-                          },
-                          size: 17,
-                        ),
-                  label: Text(primaryLabel),
+              if (_gitRebaseConflict) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _gitBusy || _agentBusy
+                        ? null
+                        : _resolveGitConflictWithCodex,
+                    icon: const Icon(Icons.auto_fix_high_outlined, size: 17),
+                    label: const Text('Resolve rebase conflict with Codex'),
+                  ),
                 ),
+                const SizedBox(height: 8),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _gitBusy ? null : primary,
+                      icon: _gitBusy
+                          ? const SizedBox(
+                              width: 17,
+                              height: 17,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              switch (state) {
+                                _GitPrimaryState.commit => Icons.commit,
+                                _GitPrimaryState.sync => Icons.sync,
+                                _GitPrimaryState.createPullRequest =>
+                                  Icons.call_merge_outlined,
+                                _ => Icons.cloud_upload_outlined,
+                              },
+                              size: 17,
+                            ),
+                      label: Text(primaryLabel),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

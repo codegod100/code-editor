@@ -1830,10 +1830,33 @@ def serve():
                     git_result, project, "rev-parse", "-q", "--verify", "REBASE_HEAD"
                 )
                 if rebase_head.returncode == 0:
-                    # A rebase conflict leaves REBASE_HEAD behind. Abort only
-                    # that state, so other failures retain their real cause.
-                    await asyncio.to_thread(git_result, project, "rebase", "--abort")
-                    raise HTTPException(409, f"Git rebase conflict: {diagnostic}")
+                    # Capture conflict paths before aborting. The editor cannot
+                    # safely choose either side of a user's source conflict,
+                    # but it can leave the checkout unchanged and identify the
+                    # files that need a deliberate terminal resolution.
+                    conflicts = await asyncio.to_thread(
+                        git_result, project, "diff", "--name-only", "--diff-filter=U"
+                    )
+                    abort = await asyncio.to_thread(git_result, project, "rebase", "--abort")
+                    if abort.returncode:
+                        raise HTTPException(
+                            500,
+                            "Git rebase conflicted and could not be aborted; resolve it in the terminal.",
+                        )
+                    conflict_paths = (
+                        [path for path in conflicts.stdout.splitlines() if path]
+                        if conflicts.returncode == 0
+                        else []
+                    )
+                    raise HTTPException(
+                        409,
+                        {
+                            "code": "rebase_conflict",
+                            "message": "Remote changes conflict with local commits. Sync was cancelled without changing your branch; resolve the conflict in the terminal, then try again.",
+                            "conflictingFiles": conflict_paths,
+                            "status": await asyncio.to_thread(git_status, project),
+                        },
+                    )
                 raise HTTPException(400, diagnostic)
             commit_started = time.monotonic()
             await commit()
