@@ -1029,6 +1029,35 @@ def serve():
     def git_error(result: subprocess.CompletedProcess, fallback: str) -> str:
         return result.stderr.strip() or result.stdout.strip() or fallback
 
+    def github_cli_result(
+        project: Path, *args: str, timeout: int = 60
+    ) -> subprocess.CompletedProcess:
+        """Run GitHub CLI with this mounted repository marked as safe.
+
+        Git commands in this service go through ``git_command``, which adds a
+        repository-scoped safe.directory entry for Modal Volume ownership.
+        GitHub CLI invokes Git itself, so it needs the equivalent setting in
+        its environment or PR operations can fail with "dubious ownership".
+        Preserve any config entries already supplied by the runtime.
+        """
+        environment = os.environ.copy()
+        try:
+            config_count = int(environment.get("GIT_CONFIG_COUNT", "0"))
+        except ValueError:
+            config_count = 0
+        environment["GIT_CONFIG_COUNT"] = str(config_count + 1)
+        environment[f"GIT_CONFIG_KEY_{config_count}"] = "safe.directory"
+        environment[f"GIT_CONFIG_VALUE_{config_count}"] = str(project.resolve())
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        return subprocess.run(
+            ["gh", *args],
+            cwd=str(project),
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            env=environment,
+        )
+
     def ensure_git_repository(project: Path) -> None:
         """Initialize projects created outside the editor when they are opened."""
         if (project / ".git").exists():
@@ -1545,17 +1574,27 @@ def serve():
             raise HTTPException(400, "auto-merge method must be merge, rebase, or squash")
         async with mutation_lock:
             result = await asyncio.to_thread(
-                subprocess.run,
-                ["gh", "pr", "create", "--title", title, "--body", description, "--base", base],
-                cwd=str(project), text=True, capture_output=True, timeout=60,
+                github_cli_result,
+                project,
+                "pr",
+                "create",
+                "--title",
+                title,
+                "--body",
+                description,
+                "--base",
+                base,
             )
             if result.returncode:
                 raise HTTPException(400, git_error(result, "could not create pull request"))
             if method_flag is not None:
                 auto_merge = await asyncio.to_thread(
-                    subprocess.run,
-                    ["gh", "pr", "merge", "--auto", method_flag],
-                    cwd=str(project), text=True, capture_output=True, timeout=60,
+                    github_cli_result,
+                    project,
+                    "pr",
+                    "merge",
+                    "--auto",
+                    method_flag,
                 )
                 if auto_merge.returncode:
                     raise HTTPException(
@@ -1582,9 +1621,12 @@ def serve():
             raise HTTPException(503, "GitHub CLI is unavailable in this deployment")
         async with mutation_lock:
             result = await asyncio.to_thread(
-                subprocess.run,
-                ["gh", "pr", "merge", "--auto", method_flag],
-                cwd=str(project), text=True, capture_output=True, timeout=60,
+                github_cli_result,
+                project,
+                "pr",
+                "merge",
+                "--auto",
+                method_flag,
             )
             if result.returncode:
                 raise HTTPException(400, git_error(result, "could not enable auto-merge"))
