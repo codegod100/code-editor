@@ -134,7 +134,7 @@ ci_repair_secret = modal.Secret.from_name(
     required_keys=["GH_TOKEN", "WEBHOOK_SECRET", "CI_REPAIR_REPOSITORIES"],
 )
 
-image = (
+base_image = (
     modal.Image.from_registry(
         "ghcr.io/cirruslabs/flutter:stable", add_python="3.12"
     )
@@ -144,6 +144,49 @@ image = (
         "itsdangerous==2.2.0",
         "openai-codex==0.156.1",
     )
+    .workdir("/app")
+    .run_commands(
+        "useradd --create-home --shell /usr/bin/fish coder",
+        "printf 'coder ALL=(ALL) NOPASSWD: ALL\\n' > /etc/sudoers.d/coder && chmod 0440 /etc/sudoers.d/coder",
+        "curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && apt-get install -y nodejs",
+        "mkdir -p /app/freeq-handoff",
+    )
+)
+
+# Keep package resolution in layers that only change when their lockfiles do.
+# Modal caches each Image method call, and an invalidated layer rebuilds every
+# layer after it.  Copying the entire application before these commands made a
+# normal source edit rerun all package installation before compiling Flutter.
+dependency_image = (
+    base_image
+    .add_local_file("package.json", remote_path="/app/package.json", copy=True)
+    .add_local_file("package-lock.json", remote_path="/app/package-lock.json", copy=True)
+    .add_local_file(
+        "freeq-handoff/package.json",
+        remote_path="/app/freeq-handoff/package.json",
+        copy=True,
+    )
+    .add_local_file(
+        "freeq-handoff/package-lock.json",
+        remote_path="/app/freeq-handoff/package-lock.json",
+        copy=True,
+    )
+    .add_local_file("pubspec.yaml", remote_path="/app/pubspec.yaml", copy=True)
+    .add_local_file("pubspec.lock", remote_path="/app/pubspec.lock", copy=True)
+    .run_commands(
+        "npm ci",
+        "npm --prefix /app/freeq-handoff ci --omit=dev",
+        "flutter pub get",
+    )
+)
+
+image = (
+    dependency_image
+    .add_local_dir(".", remote_path="/app", copy=True)
+    .run_commands(
+        "npm run build:tree-sitter",
+        f"flutter build web --release --no-wasm-dry-run --dart-define=APP_RELEASE={release_version}",
+    )
     .env(
         {
             "APP_URL": "https://codegod100--cloud-code-editor-serve.modal.run",
@@ -151,17 +194,6 @@ image = (
             RELEASE_VERSION_ENV: release_version,
             "CODEX_HOME": "/workspace/.codex",
         }
-    )
-    .add_local_dir(".", remote_path="/app", copy=True)
-    .workdir("/app")
-    .run_commands(
-        "useradd --create-home --shell /usr/bin/fish coder",
-        "printf 'coder ALL=(ALL) NOPASSWD: ALL\\n' > /etc/sudoers.d/coder && chmod 0440 /etc/sudoers.d/coder",
-        "curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && apt-get install -y nodejs",
-        "npm --prefix /app/freeq-handoff install --omit=dev",
-        "npm ci",
-        "npm run build:tree-sitter",
-        "flutter build web --release --no-wasm-dry-run --dart-define=APP_RELEASE=$APP_RELEASE",
     )
 )
 
