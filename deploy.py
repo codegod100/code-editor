@@ -263,28 +263,37 @@ def serve():
     }
 
     @api.middleware("http")
-    async def log_git_push_request(request: Request, call_next):
-        """Make ingress cancellations distinguishable from Git failures.
+    async def log_git_mutation_request(request: Request, call_next):
+        """Make Git ingress cancellations distinguishable from command failures.
 
         Modal can terminate an input before the ASGI app receives it.  Logging
-        only this potentially slow mutation keeps the operational signal useful
-        without turning routine editor traffic into log noise.
+        only potentially slow remote mutations keeps the operational signal
+        useful without turning routine editor traffic into log noise.
         """
-        is_git_push = request.method == "POST" and request.url.path.endswith("/git/push")
+        action = (
+            "push"
+            if request.method == "POST" and request.url.path.endswith("/git/push")
+            else "sync"
+            if request.method == "POST" and request.url.path.endswith("/git/sync")
+            else None
+        )
         started = time.monotonic()
-        if is_git_push:
-            print(f"git_push_started path={request.url.path}", flush=True)
+        if action:
+            print(f"git_{action}_started path={request.url.path}", flush=True)
         try:
             response = await call_next(request)
         except Exception:
-            if is_git_push:
+            if action:
                 elapsed_ms = round((time.monotonic() - started) * 1000)
-                print(f"git_push_failed path={request.url.path} elapsed_ms={elapsed_ms}", flush=True)
+                print(
+                    f"git_{action}_failed path={request.url.path} elapsed_ms={elapsed_ms}",
+                    flush=True,
+                )
             raise
-        if is_git_push:
+        if action:
             elapsed_ms = round((time.monotonic() - started) * 1000)
             print(
-                f"git_push_finished path={request.url.path} "
+                f"git_{action}_finished path={request.url.path} "
                 f"status={response.status_code} elapsed_ms={elapsed_ms}",
                 flush=True,
             )
@@ -1783,7 +1792,13 @@ def serve():
     @api.post("/api/projects/{name}/git/sync")
     async def sync_branch(name: str):
         project = await resolve_active_workspace(name)
+        status_started = time.monotonic()
         status = await asyncio.to_thread(git_status, project)
+        print(
+            f"git_sync_status_ready path={project} "
+            f"elapsed_ms={round((time.monotonic() - status_started) * 1000)}",
+            flush=True,
+        )
         if not status["isRepo"] or not status["hasRemote"]:
             raise HTTPException(400, "this branch has no origin remote")
         if status["changedCount"]:
@@ -1797,7 +1812,14 @@ def serve():
                 else ("pull", "--rebase", "origin", status["branch"])
             )
             try:
+                sync_started = time.monotonic()
                 result = await asyncio.to_thread(git_push_result, project, *pull_args)
+                print(
+                    f"git_sync_command_finished path={project} "
+                    f"elapsed_ms={round((time.monotonic() - sync_started) * 1000)} "
+                    f"returncode={result.returncode}",
+                    flush=True,
+                )
             except subprocess.TimeoutExpired as exc:
                 raise HTTPException(504, "Git sync timed out; try again") from exc
             except OSError as exc:
@@ -1813,7 +1835,13 @@ def serve():
                     await asyncio.to_thread(git_result, project, "rebase", "--abort")
                     raise HTTPException(409, f"Git rebase conflict: {diagnostic}")
                 raise HTTPException(400, diagnostic)
+            commit_started = time.monotonic()
             await commit()
+            print(
+                f"git_sync_volume_committed path={project} "
+                f"elapsed_ms={round((time.monotonic() - commit_started) * 1000)}",
+                flush=True,
+            )
         return {
             "message": result.stdout.strip() or "Synced",
             "status": await asyncio.to_thread(git_status, project),
