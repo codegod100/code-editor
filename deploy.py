@@ -998,6 +998,34 @@ def serve():
             git_command(project, *args), text=True, capture_output=True, timeout=timeout
         )
 
+    def git_push_result(
+        project: Path, *args: str, timeout: int = 120
+    ) -> subprocess.CompletedProcess:
+        """Push without waiting for an unavailable interactive credential prompt."""
+        remote = git_result(project, "remote", "get-url", "origin")
+        command = git_command(project)
+        if remote.returncode == 0:
+            parsed = urlparse(remote.stdout.strip())
+            if parsed.scheme in {"http", "https"} and parsed.hostname == "github.com":
+                # Keep the token out of the remote URL and process arguments. Git
+                # expands it inside the short-lived credential helper instead.
+                command.extend(
+                    [
+                        "-c",
+                        "credential.helper=",
+                        "-c",
+                        "credential.helper=!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f",
+                    ]
+                )
+        command.extend(args)
+        return subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            env=os.environ | {"GIT_TERMINAL_PROMPT": "0"},
+        )
+
     def git_error(result: subprocess.CompletedProcess, fallback: str) -> str:
         return result.stderr.strip() or result.stdout.strip() or fallback
 
@@ -1484,7 +1512,12 @@ def serve():
                 "origin",
                 "HEAD",
             )
-            result = await asyncio.to_thread(git_result, project, *push_args)
+            try:
+                result = await asyncio.to_thread(git_push_result, project, *push_args)
+            except subprocess.TimeoutExpired as exc:
+                raise HTTPException(504, "Git push timed out; try again") from exc
+            except OSError as exc:
+                raise HTTPException(500, f"could not start Git: {exc}") from exc
             if result.returncode:
                 raise HTTPException(400, git_error(result, "could not push branch"))
             await commit()
