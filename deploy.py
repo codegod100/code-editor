@@ -211,6 +211,7 @@ def serve():
     freeq_handoff_runs = {}
     terminal_sessions = {}
     ci_repair_runs = {}
+    pull_request_monitors: dict[str, asyncio.Task] = {}
 
     app_url = os.environ["APP_URL"].rstrip("/")
     app_release = os.environ["APP_RELEASE"]
@@ -1058,6 +1059,88 @@ def serve():
             env=environment,
         )
 
+    async def monitor_pull_request_merge(
+        project: Path, pull_request_url: str, method_flag: str
+    ) -> None:
+        """Retry auto-merge until GitHub owns the merge or the PR closes."""
+        retry_delay = 15
+        try:
+            while True:
+                view = await asyncio.to_thread(
+                    github_cli_result,
+                    project,
+                    "pr",
+                    "view",
+                    pull_request_url,
+                    "--json",
+                    "state,mergeStateStatus,autoMergeRequest",
+                )
+                if view.returncode:
+                    print(
+                        f"Could not inspect {pull_request_url}; retrying: "
+                        + git_error(view, "unknown GitHub error"),
+                        file=sys.stderr,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+
+                try:
+                    details = json.loads(view.stdout)
+                except (TypeError, json.JSONDecodeError):
+                    print(
+                        f"GitHub returned invalid data for {pull_request_url}; retrying",
+                        file=sys.stderr,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+
+                state = str(details.get("state", "")).upper()
+                if state == "MERGED":
+                    print(f"Pull request merged: {pull_request_url}")
+                    return
+                if state == "CLOSED":
+                    print(f"Pull request closed without merging: {pull_request_url}")
+                    return
+                if details.get("autoMergeRequest") is not None:
+                    await asyncio.sleep(retry_delay)
+                    continue
+
+                enable = await asyncio.to_thread(
+                    github_cli_result,
+                    project,
+                    "pr",
+                    "merge",
+                    pull_request_url,
+                    "--auto",
+                    method_flag,
+                )
+                if enable.returncode:
+                    merge_state = str(details.get("mergeStateStatus", "UNKNOWN"))
+                    print(
+                        f"Auto-merge is not ready for {pull_request_url} "
+                        f"({merge_state}); retrying: "
+                        + git_error(enable, "unknown GitHub error"),
+                        file=sys.stderr,
+                    )
+                await asyncio.sleep(retry_delay)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Monitoring failures must not take down the editor request worker.
+            print(f"Pull request monitor failed for {pull_request_url}: {exc}", file=sys.stderr)
+        finally:
+            pull_request_monitors.pop(pull_request_url, None)
+
+    def watch_pull_request_merge(
+        project: Path, pull_request_url: str, method_flag: str
+    ) -> None:
+        existing = pull_request_monitors.get(pull_request_url)
+        if existing is not None and not existing.done():
+            return
+        pull_request_monitors[pull_request_url] = asyncio.create_task(
+            monitor_pull_request_merge(project, pull_request_url, method_flag)
+        )
+
     def ensure_git_repository(project: Path) -> None:
         """Initialize projects created outside the editor when they are opened."""
         if (project / ".git").exists():
@@ -1632,23 +1715,31 @@ def serve():
             )
             if result.returncode:
                 raise HTTPException(400, git_error(result, "could not create pull request"))
+            pull_request_url = result.stdout.strip()
             if method_flag is not None:
                 auto_merge = await asyncio.to_thread(
                     github_cli_result,
                     project,
                     "pr",
                     "merge",
+                    pull_request_url,
                     "--auto",
                     method_flag,
                 )
                 if auto_merge.returncode:
-                    raise HTTPException(
-                        400,
-                        "pull request was created, but auto-merge could not be enabled: "
+                    print(
+                        f"Auto-merge is not ready for {pull_request_url}; watching: "
                         + git_error(auto_merge, "unknown error"),
+                        file=sys.stderr,
                     )
+                watch_pull_request_merge(project, pull_request_url, method_flag)
             await commit()
-        return {"url": result.stdout.strip(), "autoMergeEnabled": method_flag is not None, "status": git_status(project)}
+        return {
+            "url": pull_request_url,
+            "autoMergeEnabled": method_flag is not None and auto_merge.returncode == 0,
+            "autoMergeMonitoring": method_flag is not None,
+            "status": git_status(project),
+        }
 
     @api.post("/api/projects/{name}/git/pull-request/auto-merge")
     async def enable_auto_merge(name: str, request: Request):
@@ -1665,18 +1756,42 @@ def serve():
         if not shutil.which("gh"):
             raise HTTPException(503, "GitHub CLI is unavailable in this deployment")
         async with mutation_lock:
+            pull_request = await asyncio.to_thread(
+                github_cli_result,
+                project,
+                "pr",
+                "view",
+                "--json",
+                "url",
+                "--jq",
+                ".url",
+            )
+            if pull_request.returncode:
+                raise HTTPException(400, git_error(pull_request, "could not find pull request"))
+            pull_request_url = pull_request.stdout.strip()
             result = await asyncio.to_thread(
                 github_cli_result,
                 project,
                 "pr",
                 "merge",
+                pull_request_url,
                 "--auto",
                 method_flag,
             )
             if result.returncode:
-                raise HTTPException(400, git_error(result, "could not enable auto-merge"))
+                print(
+                    f"Auto-merge is not ready for {pull_request_url}; watching: "
+                    + git_error(result, "unknown error"),
+                    file=sys.stderr,
+                )
+            watch_pull_request_merge(project, pull_request_url, method_flag)
             await commit()
-        return {"message": result.stdout.strip() or "Auto-merge enabled", "status": git_status(project)}
+        return {
+            "message": result.stdout.strip() or "Watching pull request until it can auto-merge",
+            "autoMergeEnabled": result.returncode == 0,
+            "autoMergeMonitoring": True,
+            "status": git_status(project),
+        }
 
     @api.get("/api/projects/{name}/session")
     async def get_session(name: str):
