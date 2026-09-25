@@ -193,6 +193,7 @@ class GitStatus {
     this.ahead = 0,
     this.behind = 0,
     this.hasRemote = false,
+    this.hasUpstream = false,
     this.prAvailable = false,
   });
 
@@ -205,6 +206,7 @@ class GitStatus {
     ahead: json['ahead'] as int? ?? 0,
     behind: json['behind'] as int? ?? 0,
     hasRemote: json['hasRemote'] as bool? ?? false,
+    hasUpstream: json['hasUpstream'] as bool? ?? false,
     prAvailable: json['prAvailable'] as bool? ?? false,
   );
 
@@ -214,6 +216,7 @@ class GitStatus {
   final int ahead;
   final int behind;
   final bool hasRemote;
+  final bool hasUpstream;
   final bool prAvailable;
   int get changedCount => files.length;
 }
@@ -3376,28 +3379,33 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     ],
   );
 
-  Widget _buildAgent() => Column(
-    children: [
-      _panelHeader(
-        _runningWorkThreads.isEmpty
-            ? 'AGENT'
-            : 'AGENT · ${_runningWorkThreads.length} RUNNING',
-        _buildAgentHeaderActions(),
-      ),
-      _buildAgentTabs(),
-      if (_agentPanelTab == _AgentPanelTab.chat) _buildWorkThreadSwitcher(),
-      Expanded(
-        child: switch (_agentPanelTab) {
-          _AgentPanelTab.chat => _buildAgentConversation(),
-          _AgentPanelTab.sourceControl =>
-            _gitStatus?.isRepo == true
-                ? _buildSourceControl()
-                : const Center(child: Text('Source control is not available')),
-          _AgentPanelTab.freeq => _buildFreeqHandoffs(),
-        },
-      ),
-    ],
-  );
+  Widget _buildAgent() {
+    final gitStatus = _gitStatus;
+    return Column(
+      children: [
+        _panelHeader(
+          _runningWorkThreads.isEmpty
+              ? 'AGENT'
+              : 'AGENT · ${_runningWorkThreads.length} RUNNING',
+          _buildAgentHeaderActions(),
+        ),
+        _buildAgentTabs(),
+        if (_agentPanelTab == _AgentPanelTab.chat) _buildWorkThreadSwitcher(),
+        Expanded(
+          child: switch (_agentPanelTab) {
+            _AgentPanelTab.chat => _buildAgentConversation(),
+            _AgentPanelTab.sourceControl =>
+              gitStatus != null && gitStatus.isRepo
+                  ? _buildSourceControl(gitStatus)
+                  : const Center(
+                      child: Text('Source control is not available'),
+                    ),
+            _AgentPanelTab.freeq => _buildFreeqHandoffs(),
+          },
+        ),
+      ],
+    );
+  }
 
   List<Widget> _buildAgentHeaderActions() {
     if (_isMobile) {
@@ -3808,17 +3816,22 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     ],
   );
 
-  Widget _buildSourceControl() {
-    final status = _gitStatus!;
+  Widget _buildSourceControl(GitStatus status) {
+    final canPublish =
+        status.hasRemote && status.branch.isNotEmpty && !status.hasUpstream;
     final primary = status.changedCount > 0
         ? _commitChanges
-        : status.ahead > 0
+        : status.ahead > 0 || canPublish
         ? _pushChanges
         : null;
     final primaryLabel = status.changedCount > 0
         ? 'Commit ${status.changedCount} ${status.changedCount == 1 ? 'change' : 'changes'}'
+        : canPublish
+        ? 'Publish branch'
         : status.ahead > 0
         ? 'Push ${status.ahead} ${status.ahead == 1 ? 'commit' : 'commits'}'
+        : !status.hasRemote
+        ? 'No origin remote'
         : 'Up to date';
     return Column(
       children: [
@@ -3911,7 +3924,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         !status.hasRemote ||
                         !status.prAvailable ||
                         status.changedCount > 0 ||
-                        status.ahead == 0
+                        !status.hasUpstream ||
+                        status.ahead > 0
                     ? null
                     : _createPullRequest,
                 icon: const Icon(Icons.call_merge_outlined, size: 19),
@@ -3922,7 +3936,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                     _gitBusy ||
                         !status.hasRemote ||
                         !status.prAvailable ||
-                        status.changedCount > 0
+                        status.changedCount > 0 ||
+                        !status.hasUpstream ||
+                        status.ahead > 0
                     ? null
                     : _enableAutoMerge,
                 icon: const Icon(Icons.merge_type_outlined, size: 19),
