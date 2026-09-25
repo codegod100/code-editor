@@ -1803,12 +1803,16 @@ def serve():
             except OSError as exc:
                 raise HTTPException(500, f"could not start Git: {exc}") from exc
             if result.returncode:
-                # Do not leave the editor checkout in a half-resolved rebase.
-                await asyncio.to_thread(git_result, project, "rebase", "--abort")
-                raise HTTPException(
-                    409,
-                    "The remote changes conflict with local commits. The rebase was aborted; resolve this in the terminal.",
+                diagnostic = git_error(result, "could not sync branch")
+                rebase_head = await asyncio.to_thread(
+                    git_result, project, "rev-parse", "-q", "--verify", "REBASE_HEAD"
                 )
+                if rebase_head.returncode == 0:
+                    # A rebase conflict leaves REBASE_HEAD behind. Abort only
+                    # that state, so other failures retain their real cause.
+                    await asyncio.to_thread(git_result, project, "rebase", "--abort")
+                    raise HTTPException(409, f"Git rebase conflict: {diagnostic}")
+                raise HTTPException(400, diagnostic)
             await commit()
         return {
             "message": result.stdout.strip() or "Synced",
