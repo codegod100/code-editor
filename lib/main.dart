@@ -720,13 +720,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _loadInitial() async {
     try {
-      final values = await Future.wait([
-        _request('GET', '/api/projects'),
-        _request('GET', '/api/codex/status'),
-        _request('GET', '/api/me'),
-      ]);
+      // Account details do not affect which project opens. Keep them off the
+      // reload critical path so the remembered project can render as soon as
+      // its metadata is available.
+      final projectsResponse = await _request('GET', '/api/projects');
       final projectValues =
-          (values[0]['projects'] as List<dynamic>? ?? const [])
+          (projectsResponse['projects'] as List<dynamic>? ?? const [])
               .map(
                 (item) => ProjectSummary.fromJson(item as Map<String, dynamic>),
               )
@@ -734,20 +733,36 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       if (!mounted) return;
       setState(() {
         _projects = projectValues;
-        _codexConnected = values[1]['authenticated'] as bool? ?? false;
-        _userName = values[2]['name'] as String? ?? '';
-        _userEmail = values[2]['did'] as String? ?? '';
-        _loading = false;
       });
+      unawaited(_loadAccountMetadata());
       if (projectValues.isNotEmpty) {
         final rememberedProject = projectValues
             .where((project) => project.name == _lastProjectName)
             .firstOrNull;
         await _selectProject(rememberedProject ?? projectValues.first);
+      } else if (mounted) {
+        setState(() => _loading = false);
       }
     } catch (error) {
       _showError(error);
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadAccountMetadata() async {
+    try {
+      final values = await Future.wait([
+        _request('GET', '/api/codex/status'),
+        _request('GET', '/api/me'),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _codexConnected = values[0]['authenticated'] as bool? ?? false;
+        _userName = values[1]['name'] as String? ?? '';
+        _userEmail = values[1]['did'] as String? ?? '';
+      });
+    } catch (error) {
+      if (mounted) _showError(error);
     }
   }
 
