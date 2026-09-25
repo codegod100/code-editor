@@ -173,7 +173,10 @@ image = (
     timeout=60 * 60,
     max_containers=1,
 )
-@modal.concurrent(max_inputs=20)
+# Terminal WebSockets are long-lived Modal inputs.  Keep enough headroom for
+# ordinary HTTP work (notably Git operations) while retaining the single
+# container required by the in-memory terminal-session registry.
+@modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def serve():
     """Serve the editor UI and its project/Codex API from one origin."""
@@ -186,6 +189,7 @@ def serve():
     import shutil
     import subprocess
     import tempfile
+    import time
     from pathlib import Path, PurePosixPath
 
     from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -227,6 +231,34 @@ def serve():
     }
 
     @api.middleware("http")
+    async def log_git_push_request(request: Request, call_next):
+        """Make ingress cancellations distinguishable from Git failures.
+
+        Modal can terminate an input before the ASGI app receives it.  Logging
+        only this potentially slow mutation keeps the operational signal useful
+        without turning routine editor traffic into log noise.
+        """
+        is_git_push = request.method == "POST" and request.url.path.endswith("/git/push")
+        started = time.monotonic()
+        if is_git_push:
+            print(f"git_push_started path={request.url.path}", flush=True)
+        try:
+            response = await call_next(request)
+        except Exception:
+            if is_git_push:
+                elapsed_ms = round((time.monotonic() - started) * 1000)
+                print(f"git_push_failed path={request.url.path} elapsed_ms={elapsed_ms}", flush=True)
+            raise
+        if is_git_push:
+            elapsed_ms = round((time.monotonic() - started) * 1000)
+            print(
+                f"git_push_finished path={request.url.path} "
+                f"status={response.status_code} elapsed_ms={elapsed_ms}",
+                flush=True,
+            )
+        return response
+
+    @api.middleware("http")
     async def require_atproto_identity(request: Request, call_next):
         user = request.session.get("user")
         if request.url.path in public_paths:
@@ -236,7 +268,9 @@ def serve():
             # alone is insufficient. Authorize every project-specific HTTP
             # route here so a newly added endpoint cannot omit this check.
             match = re.match(r"^/api/projects/([^/]+)(?:/|$)", request.url.path)
-            if match and not project_owned_by(unquote(match.group(1)), user_handle(user)):
+            if match and not await asyncio.to_thread(
+                project_owned_by, unquote(match.group(1)), user_handle(user)
+            ):
                 return JSONResponse({"detail": "project not found"}, status_code=404)
             return await call_next(request)
         if request.url.path.startswith("/api/"):
@@ -747,36 +781,41 @@ def serve():
             encoding="utf-8",
         )
 
-    async def claim_legacy_projects(handle: str) -> None:
-        """Assign pre-isolation projects once, without letting later users claim them."""
+    def claim_legacy_projects_on_volume(handle: str) -> bool:
+        """Assign eligible legacy projects while running on a worker thread."""
         handle = handle.strip().lower()
         migration_path = session_root / "legacy-owner.json"
-        async with mutation_lock:
-            changed = False
-            if migration_path.exists():
-                try:
-                    migration = json.loads(migration_path.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    return
-                if not isinstance(migration, dict) or migration.get("handle") != handle:
-                    return
-            else:
-                migration_path.write_text(
-                    json.dumps({"handle": handle}, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-                changed = True
+        changed = False
+        if migration_path.exists():
+            try:
+                migration = json.loads(migration_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return False
+            if not isinstance(migration, dict) or migration.get("handle") != handle:
+                return False
+        else:
+            migration_path.write_text(
+                json.dumps({"handle": handle}, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            changed = True
 
-            for path in root.iterdir():
-                if (
-                    path.is_dir()
-                    and project_name.fullmatch(path.name)
-                    and path.name not in reserved
-                    and not (path / ".git").is_file()
-                    and not project_owner_path(path.name).exists()
-                ):
-                    write_project_owner(path.name, handle)
-                    changed = True
+        for path in root.iterdir():
+            if (
+                path.is_dir()
+                and project_name.fullmatch(path.name)
+                and path.name not in reserved
+                and not (path / ".git").is_file()
+                and not project_owner_path(path.name).exists()
+            ):
+                write_project_owner(path.name, handle)
+                changed = True
+        return changed
+
+    async def claim_legacy_projects(handle: str) -> None:
+        """Assign pre-isolation projects without blocking the ASGI event loop."""
+        async with mutation_lock:
+            changed = await asyncio.to_thread(claim_legacy_projects_on_volume, handle)
             if changed:
                 await commit()
 
@@ -856,6 +895,10 @@ def serve():
 
     def active_workspace(name: str) -> Path:
         return thread_workspace(project_dir(name))
+
+    async def resolve_active_workspace(name: str) -> Path:
+        """Resolve the active worktree without blocking on session-file I/O."""
+        return await asyncio.to_thread(active_workspace, name)
 
     def worktree_branch(title: str, thread_id: str) -> str:
         slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:36]
@@ -1220,6 +1263,34 @@ def serve():
             "prAvailable": shutil.which("gh") is not None,
         }
 
+    def project_summaries(handle: str) -> list[dict]:
+        """Read project metadata without blocking the ASGI event loop."""
+        root.mkdir(parents=True, exist_ok=True)
+        values = []
+        for path in sorted(root.iterdir(), key=lambda item: item.name.lower()):
+            if (
+                not path.is_dir()
+                or not project_name.fullmatch(path.name)
+                or path.name in reserved
+                or (path / ".git").is_file()
+                or not project_owned_by(path.name, handle)
+            ):
+                continue
+            is_repo = (path / ".git").exists()
+            branch = run_git(path, "branch", "--show-current") if is_repo else ""
+            remote = git_result(path, "remote", "get-url", "origin") if is_repo else None
+            values.append(
+                {
+                    "name": path.name,
+                    "isRepo": is_repo,
+                    "branch": branch,
+                    "repoUrl": remote.stdout.strip()
+                    if remote is not None and remote.returncode == 0
+                    else "",
+                }
+            )
+        return values
+
     def git_diff(project: Path) -> dict:
         status = git_status(project)
         if not status["isRepo"]:
@@ -1302,35 +1373,11 @@ def serve():
 
     @api.get("/api/projects")
     async def list_projects(request: Request):
-        root.mkdir(parents=True, exist_ok=True)
         handle = user_handle(request.session["user"])
         # Existing signed-in browser sessions may survive the deployment and
         # therefore not pass through the OAuth callback again.
         await claim_legacy_projects(handle)
-        values = []
-        for path in sorted(root.iterdir(), key=lambda item: item.name.lower()):
-            if (
-                not path.is_dir()
-                or not project_name.fullmatch(path.name)
-                or path.name in reserved
-                or (path / ".git").is_file()
-                or not project_owned_by(path.name, handle)
-            ):
-                continue
-            is_repo = (path / ".git").exists()
-            branch = run_git(path, "branch", "--show-current") if is_repo else ""
-            remote = git_result(path, "remote", "get-url", "origin") if is_repo else None
-            values.append(
-                {
-                    "name": path.name,
-                    "isRepo": is_repo,
-                    "branch": branch,
-                    "repoUrl": remote.stdout.strip()
-                    if remote is not None and remote.returncode == 0
-                    else "",
-                }
-            )
-        return {"projects": values}
+        return {"projects": await asyncio.to_thread(project_summaries, handle)}
 
     @api.post("/api/projects")
     async def create_project(request: Request):
@@ -1374,7 +1421,9 @@ def serve():
                 destination.mkdir()
 
             write_project_owner(name, user_handle(request.session["user"]))
-            write_session(destination, {"threadId": None, "messages": []})
+            await asyncio.to_thread(
+                write_session, destination, {"threadId": None, "messages": []}
+            )
             await commit()
         return {"name": name, "isRepo": bool(repo_url)}
 
@@ -1419,7 +1468,7 @@ def serve():
         if not branch or branch.startswith("-") or not start_point or start_point.startswith("-"):
             raise HTTPException(400, "branch and starting ref are required")
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             new_id = os.urandom(8).hex()
             destination = thread_worktree_root(project) / new_id
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1466,13 +1515,11 @@ def serve():
             ]
             session["activeThreadId"] = new_id
             sync_active_thread(session)
-            write_session(project, session)
+            await asyncio.to_thread(write_session, project, session)
             await commit()
         return {"threadId": new_id, "branch": branch, "startPoint": start_point}
 
-    @api.get("/api/projects/{name}/tree")
-    async def file_tree(name: str):
-        project = active_workspace(name)
+    def collect_file_tree(project: Path) -> dict:
         entries = []
         ignored = {".git", "build", ".dart_tool", "node_modules"}
         for base, directories, files in os.walk(project):
@@ -1485,22 +1532,39 @@ def serve():
                     return {"files": entries, "truncated": True}
         return {"files": entries, "truncated": False}
 
+    def read_text_file(target: Path) -> str:
+        if not target.is_file():
+            raise FileNotFoundError(target)
+        if target.stat().st_size > max_text_bytes:
+            raise ValueError("file is larger than 2 MiB")
+        return target.read_text(encoding="utf-8")
+
+    def write_file_bytes(target: Path, content: bytes) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+
+    @api.get("/api/projects/{name}/tree")
+    async def file_tree(name: str):
+        return await asyncio.to_thread(
+            collect_file_tree, await resolve_active_workspace(name)
+        )
+
     @api.get("/api/projects/{name}/file")
     async def read_file(name: str, path: str):
-        target = requested_file(active_workspace(name), path)
-        if not target.is_file():
-            raise HTTPException(404, "file not found")
-        if target.stat().st_size > max_text_bytes:
-            raise HTTPException(413, "file is larger than 2 MiB")
+        target = requested_file(await resolve_active_workspace(name), path)
         try:
-            content = target.read_text(encoding="utf-8")
+            content = await asyncio.to_thread(read_text_file, target)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "file not found") from exc
         except UnicodeDecodeError as exc:
             raise HTTPException(415, "file is not UTF-8 text") from exc
+        except ValueError as exc:
+            raise HTTPException(413, "file is larger than 2 MiB") from exc
         return {"path": path, "content": content}
 
     @api.put("/api/projects/{name}/file")
     async def write_file(name: str, request: Request):
-        project = active_workspace(name)
+        project = await resolve_active_workspace(name)
         body = await request.json()
         path = str(body.get("path", ""))
         content = body.get("content")
@@ -1511,27 +1575,32 @@ def serve():
             raise HTTPException(413, "file is larger than 2 MiB")
         async with mutation_lock:
             target = requested_file(project, path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(encoded)
+            await asyncio.to_thread(write_file_bytes, target, encoded)
             await commit()
         return {"saved": True, "path": path, "bytes": len(encoded)}
 
     @api.get("/api/projects/{name}/git/status")
     async def get_git_status(name: str):
-        return await asyncio.to_thread(git_status, active_workspace(name))
+        return await asyncio.to_thread(
+            git_status, await resolve_active_workspace(name)
+        )
 
     @api.get("/api/projects/{name}/git/diff")
     async def get_git_diff(name: str):
-        return await asyncio.to_thread(git_diff, active_workspace(name))
+        return await asyncio.to_thread(
+            git_diff, await resolve_active_workspace(name)
+        )
 
     @api.get("/api/projects/{name}/git/draft/{target}")
     async def get_git_draft(name: str, target: str):
-        return await asyncio.to_thread(git_draft, active_workspace(name), target)
+        return await asyncio.to_thread(
+            git_draft, await resolve_active_workspace(name), target
+        )
 
     @api.post("/api/projects/{name}/git/commit-message")
     async def suggest_commit_message(name: str):
         """Have Codex inspect the working tree and choose a concise commit subject."""
-        project = active_workspace(name)
+        project = await resolve_active_workspace(name)
         status = await asyncio.to_thread(git_status, project)
         if not status["isRepo"]:
             raise HTTPException(400, "this project is not a Git repository")
@@ -1582,11 +1651,11 @@ def serve():
 
     @api.post("/api/projects/{name}/git/commit")
     async def create_commit(name: str, request: Request):
-        project = active_workspace(name)
+        project = await resolve_active_workspace(name)
         message = str((await request.json()).get("message", "")).strip()
         if not message:
             raise HTTPException(400, "commit message is required")
-        if not git_status(project)["isRepo"]:
+        if not (await asyncio.to_thread(git_status, project))["isRepo"]:
             raise HTTPException(400, "this project is not a Git repository")
         async with mutation_lock:
             add = await asyncio.to_thread(git_result, project, "add", "-A", "--", ".")
@@ -1609,15 +1678,30 @@ def serve():
             if commit_result.returncode:
                 raise HTTPException(400, git_error(commit_result, "could not create commit"))
             await commit()
-        return {"message": commit_result.stdout.strip(), "status": git_status(project)}
+        return {
+            "message": commit_result.stdout.strip(),
+            "status": await asyncio.to_thread(git_status, project),
+        }
 
     @api.post("/api/projects/{name}/git/push")
     async def push_branch(name: str):
-        project = active_workspace(name)
-        status = git_status(project)
+        project = await resolve_active_workspace(name)
+        status_started = time.monotonic()
+        status = await asyncio.to_thread(git_status, project)
+        print(
+            f"git_push_status_ready path={project} "
+            f"elapsed_ms={round((time.monotonic() - status_started) * 1000)}",
+            flush=True,
+        )
         if not status["isRepo"] or not status["hasRemote"]:
             raise HTTPException(400, "this branch has no origin remote")
+        lock_started = time.monotonic()
         async with mutation_lock:
+            print(
+                f"git_push_lock_acquired path={project} "
+                f"wait_ms={round((time.monotonic() - lock_started) * 1000)}",
+                flush=True,
+            )
             push_args = ("push",) if status["hasUpstream"] else (
                 "push",
                 "--set-upstream",
@@ -1625,7 +1709,14 @@ def serve():
                 "HEAD",
             )
             try:
+                push_started = time.monotonic()
                 result = await asyncio.to_thread(git_push_result, project, *push_args)
+                print(
+                    f"git_push_command_finished path={project} "
+                    f"elapsed_ms={round((time.monotonic() - push_started) * 1000)} "
+                    f"returncode={result.returncode}",
+                    flush=True,
+                )
             except subprocess.TimeoutExpired as exc:
                 raise HTTPException(504, "Git push timed out; try again") from exc
             except OSError as exc:
@@ -1642,16 +1733,25 @@ def serve():
                     return {
                         "state": "sync_required",
                         "message": "The remote branch has new commits. Sync them before pushing.",
-                        "status": git_status(project),
+                        "status": await asyncio.to_thread(git_status, project),
                     }
                 raise HTTPException(400, diagnostic)
+            commit_started = time.monotonic()
             await commit()
-        return {"message": result.stdout.strip() or "Pushed", "status": git_status(project)}
+            print(
+                f"git_push_volume_committed path={project} "
+                f"elapsed_ms={round((time.monotonic() - commit_started) * 1000)}",
+                flush=True,
+            )
+        return {
+            "message": result.stdout.strip() or "Pushed",
+            "status": await asyncio.to_thread(git_status, project),
+        }
 
     @api.post("/api/projects/{name}/git/sync")
     async def sync_branch(name: str):
-        project = active_workspace(name)
-        status = git_status(project)
+        project = await resolve_active_workspace(name)
+        status = await asyncio.to_thread(git_status, project)
         if not status["isRepo"] or not status["hasRemote"]:
             raise HTTPException(400, "this branch has no origin remote")
         if status["changedCount"]:
@@ -1678,12 +1778,15 @@ def serve():
                     "The remote changes conflict with local commits. The rebase was aborted; resolve this in the terminal.",
                 )
             await commit()
-        return {"message": result.stdout.strip() or "Synced", "status": git_status(project)}
+        return {
+            "message": result.stdout.strip() or "Synced",
+            "status": await asyncio.to_thread(git_status, project),
+        }
 
     @api.post("/api/projects/{name}/git/pull-request")
     async def create_pull_request(name: str, request: Request):
-        project = active_workspace(name)
-        status = git_status(project)
+        project = await resolve_active_workspace(name)
+        status = await asyncio.to_thread(git_status, project)
         if not status["hasRemote"] or not status["hasUpstream"]:
             raise HTTPException(400, "push this branch before creating a pull request")
         if status["ahead"]:
@@ -1738,17 +1841,17 @@ def serve():
             "url": pull_request_url,
             "autoMergeEnabled": method_flag is not None and auto_merge.returncode == 0,
             "autoMergeMonitoring": method_flag is not None,
-            "status": git_status(project),
+            "status": await asyncio.to_thread(git_status, project),
         }
 
     @api.post("/api/projects/{name}/git/pull-request/auto-merge")
     async def enable_auto_merge(name: str, request: Request):
-        project = active_workspace(name)
+        project = await resolve_active_workspace(name)
         method = str((await request.json()).get("method", "")).strip()
         method_flag = {"merge": "--merge", "rebase": "--rebase", "squash": "--squash"}.get(method)
         if method_flag is None:
             raise HTTPException(400, "merge method must be merge, rebase, or squash")
-        status = git_status(project)
+        status = await asyncio.to_thread(git_status, project)
         if not status["isRepo"] or not status["hasRemote"]:
             raise HTTPException(400, "this branch has no origin remote")
         if not status["hasUpstream"] or status["ahead"]:
@@ -1790,12 +1893,12 @@ def serve():
             "message": result.stdout.strip() or "Watching pull request until it can auto-merge",
             "autoMergeEnabled": result.returncode == 0,
             "autoMergeMonitoring": True,
-            "status": git_status(project),
+            "status": await asyncio.to_thread(git_status, project),
         }
 
     @api.get("/api/projects/{name}/session")
     async def get_session(name: str):
-        return read_session(project_dir(name))
+        return await asyncio.to_thread(read_session, project_dir(name))
 
     async def create_session_thread(name: str, request: Request):
         project = project_dir(name)
@@ -1808,7 +1911,7 @@ def serve():
         if not (project / ".git").exists():
             raise HTTPException(400, "work threads require a Git repository")
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             now = datetime.now(timezone.utc).isoformat()
             new_id = os.urandom(8).hex()
             branch = worktree_branch(new_name, new_id)
@@ -1844,7 +1947,7 @@ def serve():
                 "threadId": None,
                 "messages": [],
             })
-            write_session(project, session)
+            await asyncio.to_thread(write_session, project, session)
             await commit()
         return session
 
@@ -1867,7 +1970,7 @@ def serve():
     async def archive_session_thread(name: str, thread_id: str):
         project = project_dir(name)
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             thread = session_thread(session, thread_id)
             if (name, thread_id) in active_turns:
                 raise HTTPException(409, "stop this work thread before archiving it")
@@ -1899,7 +2002,7 @@ def serve():
             session["threads"] = threads
             session["history"] = history[-20:]
             sync_active_thread(session)
-            write_session(project, session)
+            await asyncio.to_thread(write_session, project, session)
             await commit()
         return session
 
@@ -1908,7 +2011,7 @@ def serve():
         project = project_dir(name)
         body = await request.json()
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             thread = session_thread(session, str(body.get("threadId", "")))
             thread_name = str(body.get("name", "")).strip()
             if thread_name:
@@ -1917,7 +2020,7 @@ def serve():
                 thread["title"] = thread_name
             session["activeThreadId"] = thread["id"]
             sync_active_thread(session)
-            write_session(project, session)
+            await asyncio.to_thread(write_session, project, session)
             await commit()
         return session
 
@@ -1929,7 +2032,7 @@ def serve():
         if not archived_at:
             raise HTTPException(400, "archivedAt is required")
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             history = list(session.get("history", []))
             archived_index = next(
                 (
@@ -1974,7 +2077,7 @@ def serve():
             session["history"] = history
             session["activeThreadId"] = restored["id"]
             sync_active_thread(session)
-            write_session(project, session)
+            await asyncio.to_thread(write_session, project, session)
             await commit()
         return session
 
@@ -2092,10 +2195,10 @@ def serve():
             raise HTTPException(502, detail) from exc
         handoff = {"taskId": task_id, "server": server, "channel": channel, "capability": capability, "botName": "Open channel offer", "title": title, "status": "offered", "exchangeUrl": exchange_url, "workerBranch": "worker"}
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             session.setdefault("handoffs", []).append(handoff)
             session["handoffs"] = session["handoffs"][-50:]
-            write_session(project, session)
+            await asyncio.to_thread(write_session, project, session)
             await commit()
         freeq_handoff_runs[task_id] = process
         asyncio.create_task(monitor_freeq_handoff(name, project, handoff, process))
@@ -2104,7 +2207,7 @@ def serve():
     async def record_freeq_completion(project: Path, handoff: dict, result_text: str) -> None:
         """Make a completed worker report and its exchange visible for review."""
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             for saved in session.get("handoffs", []):
                 if saved.get("taskId") == handoff["taskId"]:
                     saved.update({"status": "complete", "note": result_text})
@@ -2117,7 +2220,7 @@ def serve():
                 ),
             })
             session["messages"] = messages[-100:]
-            write_session(project, session)
+            await asyncio.to_thread(write_session, project, session)
             await commit()
 
     def worker_handoff_ref(project: Path, handoff: dict) -> str:
@@ -2194,11 +2297,11 @@ def serve():
                 note = str(event.get("note") or "")
                 if status in {"accepted", "claimed"}:
                     async with mutation_lock:
-                        session = read_session(project)
+                        session = await asyncio.to_thread(read_session, project)
                         for saved in session.get("handoffs", []):
                             if saved.get("taskId") == task_id:
                                 saved.update({"status": "claimed", "botName": actor, "note": note})
-                        write_session(project, session)
+                        await asyncio.to_thread(write_session, project, session)
                         await commit()
                     continue
                 if status not in {"complete", "fail", "decline", "timeout"}:
@@ -2208,7 +2311,7 @@ def serve():
                 if status == "complete":
                     await record_freeq_completion(project, handoff, result_text)
                 async with mutation_lock:
-                    session = read_session(project)
+                    session = await asyncio.to_thread(read_session, project)
                     for saved in session.get("handoffs", []):
                         if saved.get("taskId") == task_id:
                             saved.update({"status": status, "note": result_text, "botName": actor})
@@ -2218,7 +2321,7 @@ def serve():
                             "text": f"FreeQ worker report (unverified) from {actor}: {result_text}",
                         })
                         session["messages"] = session["messages"][-100:]
-                    write_session(project, session)
+                    await asyncio.to_thread(write_session, project, session)
                     await commit()
                 break
         finally:
@@ -2227,17 +2330,17 @@ def serve():
                 await process.wait()
             if not terminal_seen:
                 async with mutation_lock:
-                    session = read_session(project)
+                    session = await asyncio.to_thread(read_session, project)
                     for saved in session.get("handoffs", []):
                         if saved.get("taskId") == task_id:
                             saved.update({"status": "fail", "note": "The FreeQ handoff session disconnected before a terminal result."})
-                    write_session(project, session)
+                    await asyncio.to_thread(write_session, project, session)
                     await commit()
 
     @api.get("/api/projects/{name}/freeq/handoffs/{task_id}")
     async def get_freeq_handoff(name: str, task_id: str):
         project = project_dir(name)
-        session = read_session(project)
+        session = await asyncio.to_thread(read_session, project)
         handoff = next((item for item in session.get("handoffs", []) if item.get("taskId") == task_id), None)
         if handoff is None:
             raise HTTPException(404, "FreeQ handoff not found")
@@ -2265,7 +2368,7 @@ def serve():
             if latest == "complete":
                 await record_freeq_completion(project, handoff, result_text)
             async with mutation_lock:
-                session = read_session(project)
+                session = await asyncio.to_thread(read_session, project)
                 for saved in session.get("handoffs", []):
                     if saved.get("taskId") == task_id:
                         saved["status"] = latest
@@ -2277,14 +2380,14 @@ def serve():
                         "text": f"FreeQ worker report (unverified) from {claimant}: {result_text}",
                     })
                     session["messages"] = session["messages"][-100:]
-                write_session(project, session)
+                await asyncio.to_thread(write_session, project, session)
                 await commit()
         return {"taskId": task_id, "status": latest, "note": note, "botName": claimant, "exchangeUrl": handoff.get("exchangeUrl", "")}
 
     @api.get("/api/projects/{name}/freeq/handoffs/{task_id}/review")
     async def review_freeq_handoff(name: str, task_id: str):
         project = project_dir(name)
-        session = read_session(project)
+        session = await asyncio.to_thread(read_session, project)
         handoff = next((item for item in session.get("handoffs", []) if item.get("taskId") == task_id), None)
         if handoff is None:
             raise HTTPException(404, "FreeQ handoff not found")
@@ -2296,7 +2399,7 @@ def serve():
     async def incorporate_freeq_handoff(name: str, task_id: str):
         project = project_dir(name)
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             handoff = next((item for item in session.get("handoffs", []) if item.get("taskId") == task_id), None)
             if handoff is None:
                 raise HTTPException(404, "FreeQ handoff not found")
@@ -2312,7 +2415,7 @@ def serve():
                 "text": f"Incorporated reviewed FreeQ worker result: {handoff['title']}",
             })
             session["messages"] = session["messages"][-100:]
-            write_session(project, session)
+            await asyncio.to_thread(write_session, project, session)
             await commit()
         return {"message": "Worker branch incorporated", "status": git_status(project)}
 
@@ -2486,11 +2589,11 @@ def serve():
         except HTTPException:
             await websocket.close(code=4401)
             return
-        if not project_owned_by(name, handle):
+        if not await asyncio.to_thread(project_owned_by, name, handle):
             await websocket.close(code=4404)
             return
         parent_project = project_dir(name)
-        project_session = read_session(parent_project)
+        project_session = await asyncio.to_thread(read_session, parent_project)
         active_thread_id = str(project_session.get("activeThreadId") or "main")
         project = thread_workspace(
             parent_project,
@@ -2516,11 +2619,13 @@ def serve():
             # privileges.  ACLs let the terminal account edit existing content
             # and make that access inherit to files the API creates later.
             try:
-                subprocess.run(
+                await asyncio.to_thread(
+                    subprocess.run,
                     ["setfacl", "--recursive", "--modify", "u:coder:rwX", str(project)],
                     check=True,
                 )
-                subprocess.run(
+                await asyncio.to_thread(
+                    subprocess.run,
                     [
                         "find", str(project), "-type", "d", "-exec",
                         "setfacl", "--modify", "d:u:coder:rwx", "{}", "+",
@@ -2532,7 +2637,8 @@ def serve():
                 # abort an already-accepted WebSocket in that case: making the
                 # terminal user the tree owner still keeps the shell non-root,
                 # while the root API process retains full access.
-                subprocess.run(
+                await asyncio.to_thread(
+                    subprocess.run,
                     ["chown", "--recursive", "coder:coder", str(project)],
                     check=True,
                 )
@@ -2714,7 +2820,7 @@ def serve():
                     raise RuntimeError("agent turn was stopped")
 
                 async with mutation_lock:
-                    session = read_session(project)
+                    session = await asyncio.to_thread(read_session, project)
                     work_thread = session_thread(session, run["threadId"])
                     codex_thread_id = work_thread.get("threadId")
                     workspace = thread_workspace(project, work_thread)
@@ -2760,7 +2866,7 @@ def serve():
                 response_text = completed_response or "".join(response_parts)
                 async with mutation_lock:
                     # Re-read so another parallel thread cannot be overwritten.
-                    session = read_session(project)
+                    session = await asyncio.to_thread(read_session, project)
                     work_thread = session_thread(session, run["threadId"])
                     messages = list(work_thread.get("messages", []))
                     messages.extend(
@@ -2775,7 +2881,7 @@ def serve():
                     if work_thread.get("title", "").startswith("Work thread "):
                         work_thread["title"] = message_text.replace("\n", " ")[:48]
                     sync_active_thread(session)
-                    write_session(project, session)
+                    await asyncio.to_thread(write_session, project, session)
                     await commit()
                 emit({"type": "complete", "messages": work_thread["messages"]})
         except Exception as exc:
@@ -2808,7 +2914,7 @@ def serve():
         if not prompt and not images:
             raise HTTPException(400, "prompt or image is required")
         async with mutation_lock:
-            session = read_session(project)
+            session = await asyncio.to_thread(read_session, project)
             work_thread = session_thread(session, str(body.get("threadId", "")) or None)
             key = (name, work_thread["id"])
             if key in active_turns:
