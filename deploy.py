@@ -809,7 +809,7 @@ def serve():
 
     def run_git(project: Path, *args: str) -> str:
         result = subprocess.run(
-            ["git", "-C", str(project), *args],
+            git_command(project, *args),
             text=True,
             capture_output=True,
             timeout=30,
@@ -818,9 +818,23 @@ def serve():
             return result.stderr.strip() or result.stdout.strip()
         return result.stdout.strip()
 
+    def git_command(project: Path, *args: str) -> list[str]:
+        # Modal Volumes are bind-mounted from /__modal/volumes and can retain a
+        # different numeric owner across container images. Git resolves the
+        # logical /workspace path to that backing path before applying its
+        # ownership check, so trust this repository's resolved path only.
+        return [
+            "git",
+            "-c",
+            f"safe.directory={project.resolve()}",
+            "-C",
+            str(project),
+            *args,
+        ]
+
     def git_result(project: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProcess:
         return subprocess.run(
-            ["git", "-C", str(project), *args], text=True, capture_output=True, timeout=timeout
+            git_command(project, *args), text=True, capture_output=True, timeout=timeout
         )
 
     def git_error(result: subprocess.CompletedProcess, fallback: str) -> str:
@@ -1555,7 +1569,7 @@ def serve():
         exchange_url = f"https://agentgit.co/{exchange_name}.git"
         snapshot = await asyncio.to_thread(
             subprocess.run,
-            ["git", "-C", str(project), "push", exchange_url, "HEAD:refs/heads/main"],
+            git_command(project, "push", exchange_url, "HEAD:refs/heads/main"),
             text=True,
             capture_output=True,
             timeout=300,
@@ -2043,7 +2057,17 @@ def serve():
                 )
             master_fd, slave_fd = pty.openpty()
             environment = os.environ.copy()
-            environment.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
+            environment.update(
+                {
+                    "TERM": "xterm-256color",
+                    "COLORTERM": "truecolor",
+                    # Keep interactive Git usable when a persisted Modal Volume
+                    # is owned by a UID from an earlier container image.
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "safe.directory",
+                    "GIT_CONFIG_VALUE_0": str(project.resolve()),
+                }
+            )
             process = subprocess.Popen(
                 # Modal's root-shell configuration has previously changed a child
                 # shell from the requested cwd to the Volume backing path
