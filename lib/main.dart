@@ -221,6 +221,19 @@ class GitStatus {
   int get changedCount => files.length;
 }
 
+enum _GitPrimaryState { commit, sync, publish, push, createPullRequest, clean }
+
+class _ApiException implements Exception {
+  const _ApiException(this.message, {this.code, this.data = const {}});
+
+  final String message;
+  final String? code;
+  final Map<String, dynamic> data;
+
+  @override
+  String toString() => message;
+}
+
 class FileTreeNode {
   FileTreeNode.directory(this.name, this.path)
     : isDirectory = true,
@@ -490,6 +503,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   bool _codexConnected = false;
   GitStatus? _gitStatus;
   bool _gitBusy = false;
+  bool _gitSyncRequired = false;
   bool _diffBusy = false;
   String _userName = '';
   String _userEmail = '';
@@ -615,9 +629,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
     final status = response.status ?? 0;
     if (status < 200 || status >= 300) {
-      throw StateError(
-        decoded['detail']?.toString() ?? 'Request failed ($status)',
-      );
+      final detail = decoded['detail'];
+      if (detail is Map<String, dynamic>) {
+        throw _ApiException(
+          detail['message']?.toString() ?? 'Request failed ($status)',
+          code: detail['code']?.toString(),
+          data: detail,
+        );
+      }
+      throw _ApiException(detail?.toString() ?? 'Request failed ($status)');
     }
     return decoded;
   }
@@ -720,6 +740,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _threadHistory = const [];
       _freeqHandoffs = const [];
       _agentPanelTab = _AgentPanelTab.chat;
+      _gitSyncRequired = false;
       _loading = true;
       _error = null;
     });
@@ -1609,6 +1630,31 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       await _runGitAction('/git/push', null, 'Branch pushed');
   }
 
+  Future<void> _syncChanges() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Sync remote changes?'),
+        content: const Text(
+          'Rebase your local commits on the latest remote branch, then you can push again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sync'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _runGitAction('/git/sync', null, 'Branch synced');
+    }
+  }
+
   Future<void> _createPullRequest() async {
     Map<String, dynamic> draft;
     try {
@@ -1722,10 +1768,38 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     setState(() => _gitBusy = true);
     try {
       final response = await _request('POST', _projectUrl(endpoint), body);
+      if (response['state'] == 'sync_required') {
+        final status = response['status'];
+        if (mounted) {
+          setState(() {
+            _gitSyncRequired = true;
+            if (status is Map<String, dynamic>) {
+              _gitStatus = GitStatus.fromJson(status);
+            }
+          });
+          _showError(
+            response['message']?.toString() ??
+                'The remote branch has new commits. Sync them before pushing.',
+          );
+        }
+        return;
+      }
+      _gitSyncRequired = false;
       await _refreshGitStatus();
       if (response['url'] is String && mounted) {
         _showError('$success: ${response['url']}');
       }
+    } on _ApiException catch (error) {
+      if (error.code == 'remote_ahead' && mounted) {
+        final status = error.data['status'];
+        setState(() {
+          _gitSyncRequired = true;
+          if (status is Map<String, dynamic>) {
+            _gitStatus = GitStatus.fromJson(status);
+          }
+        });
+      }
+      _showError(error);
     } catch (error) {
       _showError(error);
     } finally {
@@ -1957,6 +2031,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _workThreads = const [];
       _activeWorkThreadId = null;
       _threadHistory = const [];
+      _gitSyncRequired = false;
       _error = null;
     });
   }
@@ -3791,24 +3866,35 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         status.hasUpstream &&
         status.prAvailable &&
         status.ahead == 0;
-    final VoidCallback? primary = status.changedCount > 0
-        ? _commitChanges
-        : status.ahead > 0 || canPublish
-        ? _pushChanges
-        : canCreatePullRequest
-        ? _createPullRequest
-        : null;
-    final primaryLabel = status.changedCount > 0
-        ? 'Commit ${status.changedCount} ${status.changedCount == 1 ? 'change' : 'changes'}'
+    final state = status.changedCount > 0
+        ? _GitPrimaryState.commit
+        : _gitSyncRequired || status.behind > 0
+        ? _GitPrimaryState.sync
         : canPublish
-        ? 'Publish branch'
+        ? _GitPrimaryState.publish
         : status.ahead > 0
-        ? 'Push ${status.ahead} ${status.ahead == 1 ? 'commit' : 'commits'}'
+        ? _GitPrimaryState.push
         : canCreatePullRequest
-        ? 'Create pull request'
-        : !status.hasRemote
-        ? 'No origin remote'
-        : 'Up to date';
+        ? _GitPrimaryState.createPullRequest
+        : _GitPrimaryState.clean;
+    final VoidCallback? primary = switch (state) {
+      _GitPrimaryState.commit => _commitChanges,
+      _GitPrimaryState.sync => _syncChanges,
+      _GitPrimaryState.publish || _GitPrimaryState.push => _pushChanges,
+      _GitPrimaryState.createPullRequest => _createPullRequest,
+      _GitPrimaryState.clean => null,
+    };
+    final primaryLabel = switch (state) {
+      _GitPrimaryState.commit =>
+        'Commit ${status.changedCount} ${status.changedCount == 1 ? 'change' : 'changes'}',
+      _GitPrimaryState.sync => 'Sync remote changes',
+      _GitPrimaryState.publish => 'Publish branch',
+      _GitPrimaryState.push =>
+        'Push ${status.ahead} ${status.ahead == 1 ? 'commit' : 'commits'}',
+      _GitPrimaryState.createPullRequest => 'Create pull request',
+      _GitPrimaryState.clean =>
+        !status.hasRemote ? 'No origin remote' : 'Up to date',
+    };
     return Column(
       children: [
         Padding(
@@ -3884,13 +3970,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 child: FilledButton.icon(
                   onPressed: _gitBusy ? null : primary,
                   icon: Icon(
-                    status.changedCount > 0
-                        ? Icons.commit
-                        : status.ahead > 0
-                        ? Icons.cloud_upload_outlined
-                        : canCreatePullRequest
-                        ? Icons.call_merge_outlined
-                        : Icons.cloud_upload_outlined,
+                    switch (state) {
+                      _GitPrimaryState.commit => Icons.commit,
+                      _GitPrimaryState.sync => Icons.sync,
+                      _GitPrimaryState.createPullRequest =>
+                        Icons.call_merge_outlined,
+                      _ => Icons.cloud_upload_outlined,
+                    },
                     size: 17,
                   ),
                   label: Text(primaryLabel),
