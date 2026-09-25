@@ -1548,9 +1548,54 @@ def serve():
             except OSError as exc:
                 raise HTTPException(500, f"could not start Git: {exc}") from exc
             if result.returncode:
-                raise HTTPException(400, git_error(result, "could not push branch"))
+                diagnostic = git_error(result, "could not push branch")
+                if any(
+                    marker in diagnostic.lower()
+                    for marker in ("fetch first", "non-fast-forward", "failed to push some refs")
+                ):
+                    # Refresh the remote-tracking ref so the next UI state can
+                    # offer a deliberate rebase instead of repeating Push.
+                    await asyncio.to_thread(git_push_result, project, "fetch", "origin")
+                    return {
+                        "state": "sync_required",
+                        "message": "The remote branch has new commits. Sync them before pushing.",
+                        "status": git_status(project),
+                    }
+                raise HTTPException(400, diagnostic)
             await commit()
         return {"message": result.stdout.strip() or "Pushed", "status": git_status(project)}
+
+    @api.post("/api/projects/{name}/git/sync")
+    async def sync_branch(name: str):
+        project = active_workspace(name)
+        status = git_status(project)
+        if not status["isRepo"] or not status["hasRemote"]:
+            raise HTTPException(400, "this branch has no origin remote")
+        if status["changedCount"]:
+            raise HTTPException(400, "commit or discard local changes before syncing")
+        if not status["branch"]:
+            raise HTTPException(400, "cannot sync a detached HEAD")
+        async with mutation_lock:
+            pull_args = (
+                ("pull", "--rebase")
+                if status["hasUpstream"]
+                else ("pull", "--rebase", "origin", status["branch"])
+            )
+            try:
+                result = await asyncio.to_thread(git_push_result, project, *pull_args)
+            except subprocess.TimeoutExpired as exc:
+                raise HTTPException(504, "Git sync timed out; try again") from exc
+            except OSError as exc:
+                raise HTTPException(500, f"could not start Git: {exc}") from exc
+            if result.returncode:
+                # Do not leave the editor checkout in a half-resolved rebase.
+                await asyncio.to_thread(git_result, project, "rebase", "--abort")
+                raise HTTPException(
+                    409,
+                    "The remote changes conflict with local commits. The rebase was aborted; resolve this in the terminal.",
+                )
+            await commit()
+        return {"message": result.stdout.strip() or "Synced", "status": git_status(project)}
 
     @api.post("/api/projects/{name}/git/pull-request")
     async def create_pull_request(name: str, request: Request):
