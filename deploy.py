@@ -179,6 +179,7 @@ def serve():
     """Serve the editor UI and its project/Codex API from one origin."""
     import asyncio
     import hmac
+    import html
     import json
     import os
     import re
@@ -268,6 +269,41 @@ def serve():
             return json.loads(stdout)
         except ValueError as exc:
             raise HTTPException(502, "AT Protocol OAuth helper returned invalid JSON") from exc
+
+    def auth_error_page(title: str, message: str, status_code: int) -> HTMLResponse:
+        """Render a browser-friendly authentication error without leaking internals."""
+        safe_title = html.escape(title)
+        safe_message = html.escape(message)
+        return HTMLResponse(f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1117">
+  <title>{safe_title} · Codex Workspace</title>
+  <style>
+    :root {{ color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0d1117; color: #f0f6fc; }}
+    * {{ box-sizing: border-box; }}
+    body {{ display: grid; min-width: 320px; min-height: 100vh; min-height: 100svh; margin: 0; padding: 24px; place-items: center; background: radial-gradient(circle at 50% -18%, rgba(248, 81, 73, .14), transparent 42rem), #0d1117; }}
+    main {{ width: min(100%, 440px); padding: 36px; border: 1px solid #30363d; border-radius: 16px; background: rgba(22, 27, 34, .96); box-shadow: 0 24px 80px rgba(0, 0, 0, .38); }}
+    .mark {{ display: grid; width: 42px; height: 42px; margin-bottom: 24px; place-items: center; border: 1px solid #6e3632; border-radius: 12px; background: rgba(248, 81, 73, .1); color: #ff938a; font-size: 24px; font-weight: 650; }}
+    h1 {{ margin: 0; font-size: clamp(26px, 7vw, 34px); line-height: 1.15; letter-spacing: -.03em; }}
+    p {{ margin: 14px 0 28px; color: #aeb6c0; font-size: 15px; line-height: 1.6; }}
+    a {{ display: inline-flex; align-items: center; justify-content: center; min-height: 46px; padding: 0 18px; border: 1px solid #8fa9ff; border-radius: 8px; background: #7c9cff; color: #071023; font-weight: 700; text-decoration: none; }}
+    a:hover {{ background: #91aaff; }}
+    a:focus-visible {{ outline: 3px solid rgba(169, 189, 255, .38); outline-offset: 3px; }}
+    @media (max-width: 560px) {{ main {{ padding: 28px 22px; }} }}
+  </style>
+</head>
+<body>
+  <main aria-labelledby="error-title">
+    <div class="mark" aria-hidden="true">!</div>
+    <h1 id="error-title">{safe_title}</h1>
+    <p>{safe_message}</p>
+    <a href="/auth/login">Try signing in again</a>
+  </main>
+</body>
+</html>""", status_code=status_code)
 
     @api.get("/auth/login")
     async def login():
@@ -598,26 +634,56 @@ def serve():
 </html>""")
 
     @api.get("/auth/authorize")
-    async def authorize(identity: str, request: Request):
+    async def authorize(request: Request, identity: str = ""):
         identity = identity.strip()
         if not identity or identity.startswith("did:"):
-            raise HTTPException(400, "an AT Protocol handle is required")
+            return auth_error_page(
+                "Enter a valid handle",
+                "Use your AT Protocol handle, such as you.bsky.social, to continue.",
+                400,
+            )
         request.session["atproto_handle"] = identity.lower()
-        result = await atproto_oauth("authorize", {"identity": identity})
-        return RedirectResponse(result["url"], status_code=303)
+        try:
+            result = await atproto_oauth("authorize", {"identity": identity})
+        except Exception:
+            return auth_error_page(
+                "We couldn't find that account",
+                "Confirm the handle is correct and publicly resolves, then try again. If the account is new, it may need a moment before it is available.",
+                502,
+            )
+        authorization_url = result.get("url") if isinstance(result, dict) else None
+        if not isinstance(authorization_url, str) or not authorization_url:
+            return auth_error_page(
+                "Sign-in is temporarily unavailable",
+                "The identity provider returned an incomplete response. Please try again.",
+                502,
+            )
+        return RedirectResponse(authorization_url, status_code=303)
 
     @api.get("/auth/callback")
     async def auth_callback(request: Request):
         try:
             result = await atproto_oauth("callback", {"params": list(request.query_params.multi_items())})
-        except Exception as exc:
-            raise HTTPException(401, f"AT Protocol login failed: {exc}") from exc
-        did = result.get("did")
+        except Exception:
+            return auth_error_page(
+                "Sign-in wasn't completed",
+                "Your identity provider did not complete the sign-in request. Please start again.",
+                401,
+            )
+        did = result.get("did") if isinstance(result, dict) else None
         if not isinstance(did, str) or not did.startswith("did:"):
-            raise HTTPException(401, "AT Protocol login did not return a DID")
+            return auth_error_page(
+                "We couldn't verify your identity",
+                "The sign-in response was incomplete. Please start again.",
+                401,
+            )
         handle = request.session.pop("atproto_handle", None)
         if not isinstance(handle, str) or not handle:
-            raise HTTPException(401, "AT Protocol login is missing its original handle")
+            return auth_error_page(
+                "Your sign-in session expired",
+                "The original sign-in request is no longer available. Please start again.",
+                401,
+            )
         request.session["user"] = {
             "did": did,
             "handle": handle,
