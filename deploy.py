@@ -699,6 +699,29 @@ def serve():
     def session_path(project: Path) -> Path:
         return session_root / project.name / "session.json"
 
+    def thread_worktree_root(project: Path) -> Path:
+        return session_root / project.name / "worktrees"
+
+    def thread_workspace(project: Path, thread: dict | None = None) -> Path:
+        """Return the checkout owned by a work thread, or the primary checkout."""
+        if thread is None:
+            session = read_session(project)
+            thread = session_thread(session, session.get("activeThreadId"))
+        worktree_id = thread.get("worktree")
+        if not isinstance(worktree_id, str) or not re.fullmatch(r"[0-9a-f]{16}", worktree_id):
+            return project
+        workspace = thread_worktree_root(project) / worktree_id
+        if not workspace.is_dir():
+            raise HTTPException(409, "this work thread's Git worktree is missing")
+        return workspace
+
+    def active_workspace(name: str) -> Path:
+        return thread_workspace(project_dir(name))
+
+    def worktree_branch(title: str, thread_id: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:36]
+        return f"codex/{slug or 'work-thread'}-{thread_id[:6]}"
+
     def migrate_legacy_session(project: Path) -> None:
         """Move editor-owned state out of an existing project checkout."""
         legacy_directory = project / ".code-editor"
@@ -990,6 +1013,7 @@ def serve():
                 not path.is_dir()
                 or not project_name.fullmatch(path.name)
                 or path.name in reserved
+                or (path / ".git").is_file()
             ):
                 continue
             is_repo = (path / ".git").exists()
@@ -1092,10 +1116,11 @@ def serve():
             raise HTTPException(400, "worktree name must use letters, numbers, ., _, or -")
         if not branch or branch.startswith("-") or not start_point or start_point.startswith("-"):
             raise HTTPException(400, "branch and starting ref are required")
-        destination = root / workspace_name
         async with mutation_lock:
-            if destination.exists():
-                raise HTTPException(409, "a project or worktree with that name already exists")
+            session = read_session(project)
+            new_id = os.urandom(8).hex()
+            destination = thread_worktree_root(project) / new_id
+            destination.parent.mkdir(parents=True, exist_ok=True)
             effective_start_point = start_point
             if start_point == "main":
                 remote = await asyncio.to_thread(
@@ -1123,13 +1148,29 @@ def serve():
             )
             if result.returncode:
                 raise HTTPException(400, git_error(result, "could not create worktree"))
-            write_session(destination, {"threadId": None, "messages": []})
+            now = datetime.now(timezone.utc).isoformat()
+            session["threads"] = [
+                *session.get("threads", []),
+                {
+                    "id": new_id,
+                    "title": workspace_name,
+                    "threadId": None,
+                    "worktree": new_id,
+                    "branch": branch,
+                    "messages": [],
+                    "createdAt": now,
+                    "updatedAt": now,
+                },
+            ]
+            session["activeThreadId"] = new_id
+            sync_active_thread(session)
+            write_session(project, session)
             await commit()
-        return {"name": workspace_name, "branch": branch, "startPoint": start_point}
+        return {"threadId": new_id, "branch": branch, "startPoint": start_point}
 
     @api.get("/api/projects/{name}/tree")
     async def file_tree(name: str):
-        project = project_dir(name)
+        project = active_workspace(name)
         entries = []
         ignored = {".git", "build", ".dart_tool", "node_modules"}
         for base, directories, files in os.walk(project):
@@ -1144,7 +1185,7 @@ def serve():
 
     @api.get("/api/projects/{name}/file")
     async def read_file(name: str, path: str):
-        target = requested_file(project_dir(name), path)
+        target = requested_file(active_workspace(name), path)
         if not target.is_file():
             raise HTTPException(404, "file not found")
         if target.stat().st_size > max_text_bytes:
@@ -1157,7 +1198,7 @@ def serve():
 
     @api.put("/api/projects/{name}/file")
     async def write_file(name: str, request: Request):
-        project = project_dir(name)
+        project = active_workspace(name)
         body = await request.json()
         path = str(body.get("path", ""))
         content = body.get("content")
@@ -1175,20 +1216,20 @@ def serve():
 
     @api.get("/api/projects/{name}/git/status")
     async def get_git_status(name: str):
-        return await asyncio.to_thread(git_status, project_dir(name))
+        return await asyncio.to_thread(git_status, active_workspace(name))
 
     @api.get("/api/projects/{name}/git/diff")
     async def get_git_diff(name: str):
-        return await asyncio.to_thread(git_diff, project_dir(name))
+        return await asyncio.to_thread(git_diff, active_workspace(name))
 
     @api.get("/api/projects/{name}/git/draft/{target}")
     async def get_git_draft(name: str, target: str):
-        return await asyncio.to_thread(git_draft, project_dir(name), target)
+        return await asyncio.to_thread(git_draft, active_workspace(name), target)
 
     @api.post("/api/projects/{name}/git/commit-message")
     async def suggest_commit_message(name: str):
         """Have Codex inspect the working tree and choose a concise commit subject."""
-        project = project_dir(name)
+        project = active_workspace(name)
         status = await asyncio.to_thread(git_status, project)
         if not status["isRepo"]:
             raise HTTPException(400, "this project is not a Git repository")
@@ -1239,7 +1280,7 @@ def serve():
 
     @api.post("/api/projects/{name}/git/commit")
     async def create_commit(name: str, request: Request):
-        project = project_dir(name)
+        project = active_workspace(name)
         message = str((await request.json()).get("message", "")).strip()
         if not message:
             raise HTTPException(400, "commit message is required")
@@ -1270,7 +1311,7 @@ def serve():
 
     @api.post("/api/projects/{name}/git/push")
     async def push_branch(name: str):
-        project = project_dir(name)
+        project = active_workspace(name)
         status = git_status(project)
         if not status["isRepo"] or not status["hasRemote"]:
             raise HTTPException(400, "this branch has no origin remote")
@@ -1283,7 +1324,7 @@ def serve():
 
     @api.post("/api/projects/{name}/git/pull-request")
     async def create_pull_request(name: str, request: Request):
-        project = project_dir(name)
+        project = active_workspace(name)
         body = await request.json()
         title = str(body.get("title", "")).strip()
         base = str(body.get("base", "")).strip()
@@ -1321,7 +1362,7 @@ def serve():
 
     @api.post("/api/projects/{name}/git/pull-request/auto-merge")
     async def enable_auto_merge(name: str, request: Request):
-        project = project_dir(name)
+        project = active_workspace(name)
         method = str((await request.json()).get("method", "")).strip()
         method_flag = {"merge": "--merge", "rebase": "--rebase", "squash": "--squash"}.get(method)
         if method_flag is None:
@@ -1354,15 +1395,35 @@ def serve():
             raise HTTPException(400, "work thread name is required")
         if len(new_name) > 100:
             raise HTTPException(400, "work thread name must be 100 characters or fewer")
+        if not (project / ".git").exists():
+            raise HTTPException(400, "work threads require a Git repository")
         async with mutation_lock:
             session = read_session(project)
             now = datetime.now(timezone.utc).isoformat()
             new_id = os.urandom(8).hex()
+            branch = worktree_branch(new_name, new_id)
+            destination = thread_worktree_root(project) / new_id
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            result = await asyncio.to_thread(
+                git_result,
+                project,
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                str(destination),
+                "HEAD",
+                timeout=120,
+            )
+            if result.returncode:
+                raise HTTPException(400, git_error(result, "could not create the work thread checkout"))
             threads = list(session.get("threads", []))
             threads.append({
                 "id": new_id,
                 "title": new_name,
                 "threadId": None,
+                "worktree": new_id,
+                "branch": branch,
                 "messages": [],
                 "createdAt": now,
                 "updatedAt": now,
@@ -1381,9 +1442,9 @@ def serve():
     async def post_session_thread(name: str, request: Request):
         """Create a work thread inside an existing project.
 
-        Work threads are conversation/session records, not projects or Git
-        worktrees. Keeping this as a nested project resource prevents clients
-        from treating a new thread as another entry in the project picker.
+        Each thread owns a linked Git worktree stored in editor-private state.
+        Keeping both as nested project resources prevents the checkout from
+        appearing as another project in the picker.
         """
         return await create_session_thread(name, request)
 
@@ -1405,6 +1466,8 @@ def serve():
             history.append({
                 "name": thread.get("title", "Untitled thread"),
                 "threadId": thread.get("threadId"),
+                "worktree": thread.get("worktree"),
+                "branch": thread.get("branch"),
                 "messages": thread.get("messages", []),
                 "archivedAt": now,
             })
@@ -1491,6 +1554,8 @@ def serve():
                 "id": os.urandom(8).hex(),
                 "title": title,
                 "threadId": archived.get("threadId"),
+                "worktree": archived.get("worktree"),
+                "branch": archived.get("branch"),
                 "messages": messages,
                 "createdAt": archived.get("createdAt", now),
                 "updatedAt": now,
@@ -1862,10 +1927,15 @@ def serve():
     async def close_project_terminal(name: str, session_id: int, request: Request):
         if not request.session.get("user"):
             raise HTTPException(401, "authentication required")
-        session = terminal_sessions.pop((name, session_id), None)
-        if session is not None:
+        matching_keys = [
+            key
+            for key in terminal_sessions
+            if key[0] == name and key[-1] == session_id
+        ]
+        sessions = [terminal_sessions.pop(key) for key in matching_keys]
+        for session in sessions:
             await asyncio.to_thread(stop_terminal_session, session)
-        return {"closed": session is not None}
+        return {"closed": bool(sessions)}
 
     async def execute_ci_repair(repair_id: str, repository: str, head_sha: str, run_id: int, branch: str) -> None:
         """Ask Codex to fix one failed CI run and open a draft pull request."""
@@ -2000,12 +2070,18 @@ def serve():
         if not websocket.session.get("user"):
             await websocket.close(code=4401)
             return
-        project = project_dir(name)
+        parent_project = project_dir(name)
+        project_session = read_session(parent_project)
+        active_thread_id = str(project_session.get("activeThreadId") or "main")
+        project = thread_workspace(
+            parent_project,
+            session_thread(project_session, active_thread_id),
+        )
         session_id = websocket.query_params.get("session")
         if not session_id or not session_id.isdigit():
             await websocket.close(code=4400)
             return
-        session_key = (name, int(session_id))
+        session_key = (name, active_thread_id, int(session_id))
         await websocket.accept()
 
         import pty
@@ -2207,16 +2283,17 @@ def serve():
                     session = read_session(project)
                     work_thread = session_thread(session, run["threadId"])
                     codex_thread_id = work_thread.get("threadId")
+                    workspace = thread_workspace(project, work_thread)
                 if codex_thread_id:
                     thread = await codex.thread_resume(
                         codex_thread_id,
-                        cwd=str(project),
+                        cwd=str(workspace),
                         sandbox=Sandbox.workspace_write,
                         approval_mode=ApprovalMode.auto_review,
                     )
                 else:
                     thread = await codex.thread_start(
-                        cwd=str(project),
+                        cwd=str(workspace),
                         sandbox=Sandbox.workspace_write,
                         approval_mode=ApprovalMode.auto_review,
                         developer_instructions=(
