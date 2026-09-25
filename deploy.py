@@ -193,7 +193,7 @@ def serve():
     from urllib.parse import quote, unquote, urlparse
     from urllib.request import urlopen
     from fastapi.staticfiles import StaticFiles
-    from openai_codex import ApprovalMode, AsyncCodex, Sandbox
+    from openai_codex import ApprovalMode, AsyncCodex, ImageInput, Sandbox, TextInput
     from starlette.middleware.sessions import SessionMiddleware
 
     api = FastAPI(title="Cloud Code Editor", docs_url=None, redoc_url=None)
@@ -2691,9 +2691,14 @@ def serve():
             return {"type": "activity", "text": "Preparing a response"}
         return None
 
-    async def execute_agent_run(name: str, project: Path, prompt: str, run: dict):
+    async def execute_agent_run(
+        name: str, project: Path, prompt: str, images: list[str], run: dict
+    ):
         """Run Codex and make its non-sensitive progress available to the chat UI."""
         queue = run["events"]
+        message_text = prompt or (
+            f"[{len(images)} image{'s' if len(images) != 1 else ''} attached]"
+        )
 
         def emit(value: dict) -> None:
             queue.put_nowait(value)
@@ -2732,7 +2737,9 @@ def serve():
                         ),
                     )
 
-                turn = await thread.turn(prompt)
+                turn_input = [TextInput(prompt or "Describe and act on the attached image(s).")]
+                turn_input.extend(ImageInput(image) for image in images)
+                turn = await thread.turn(turn_input)
                 run["turn"] = turn
                 if run["stopped"]:
                     await turn.interrupt()
@@ -2758,7 +2765,7 @@ def serve():
                     messages = list(work_thread.get("messages", []))
                     messages.extend(
                         [
-                            {"role": "user", "text": prompt},
+                            {"role": "user", "text": message_text},
                             {"role": "assistant", "text": response_text},
                         ]
                     )
@@ -2766,7 +2773,7 @@ def serve():
                     work_thread["messages"] = messages[-100:]
                     work_thread["updatedAt"] = datetime.now(timezone.utc).isoformat()
                     if work_thread.get("title", "").startswith("Work thread "):
-                        work_thread["title"] = prompt.replace("\n", " ")[:48]
+                        work_thread["title"] = message_text.replace("\n", " ")[:48]
                     sync_active_thread(session)
                     write_session(project, session)
                     await commit()
@@ -2788,8 +2795,18 @@ def serve():
         project = project_dir(name)
         body = await request.json()
         prompt = str(body.get("prompt", "")).strip()
-        if not prompt:
-            raise HTTPException(400, "prompt is required")
+        images = body.get("images", [])
+        if not isinstance(images, list) or len(images) > 4:
+            raise HTTPException(400, "images must be a list of at most 4 items")
+        if any(
+            not isinstance(image, str)
+            or not re.match(r"^data:image/(?:png|jpeg|webp|gif);base64,", image)
+            or len(image) > 14_000_000
+            for image in images
+        ):
+            raise HTTPException(400, "images must be image data URLs no larger than 10 MiB")
+        if not prompt and not images:
+            raise HTTPException(400, "prompt or image is required")
         async with mutation_lock:
             session = read_session(project)
             work_thread = session_thread(session, str(body.get("threadId", "")) or None)
@@ -2801,7 +2818,9 @@ def serve():
                    "threadId": work_thread["id"]}
             active_turns[key] = run
             agent_runs[run_id] = run
-            run["task"] = asyncio.create_task(execute_agent_run(name, project, prompt, run))
+            run["task"] = asyncio.create_task(
+                execute_agent_run(name, project, prompt, images, run)
+            )
         return {"runId": run_id}
 
     @api.get("/api/projects/{name}/agent/events/{run_id}")

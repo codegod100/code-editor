@@ -16,24 +16,24 @@ class AgentWorkspaceApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Codex Workspace',
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData.dark(useMaterial3: true).copyWith(
-      scaffoldBackgroundColor: const Color(0xFF0D1117),
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF7C9CFF),
-        brightness: Brightness.dark,
-        surface: const Color(0xFF161B22),
-      ),
-      dividerColor: const Color(0xFF30363D),
-      inputDecorationTheme: const InputDecorationTheme(
-        filled: true,
-        fillColor: Color(0xFF0D1117),
-        border: OutlineInputBorder(),
-      ),
-    ),
-    home: const WorkspaceScreen(),
-  );
+        title: 'Codex Workspace',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData.dark(useMaterial3: true).copyWith(
+          scaffoldBackgroundColor: const Color(0xFF0D1117),
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF7C9CFF),
+            brightness: Brightness.dark,
+            surface: const Color(0xFF161B22),
+          ),
+          dividerColor: const Color(0xFF30363D),
+          inputDecorationTheme: const InputDecorationTheme(
+            filled: true,
+            fillColor: Color(0xFF0D1117),
+            border: OutlineInputBorder(),
+          ),
+        ),
+        home: const WorkspaceScreen(),
+      );
 }
 
 class ProjectSummary {
@@ -45,11 +45,11 @@ class ProjectSummary {
   });
 
   factory ProjectSummary.fromJson(Map<String, dynamic> json) => ProjectSummary(
-    name: json['name'] as String,
-    isRepo: json['isRepo'] as bool? ?? false,
-    branch: json['branch'] as String? ?? '',
-    repoUrl: json['repoUrl'] as String? ?? '',
-  );
+        name: json['name'] as String,
+        isRepo: json['isRepo'] as bool? ?? false,
+        branch: json['branch'] as String? ?? '',
+        repoUrl: json['repoUrl'] as String? ?? '',
+      );
 
   final String name;
   final bool isRepo;
@@ -61,12 +61,24 @@ class AgentMessage {
   const AgentMessage({required this.role, required this.text});
 
   factory AgentMessage.fromJson(Map<String, dynamic> json) => AgentMessage(
-    role: json['role'] as String? ?? 'assistant',
-    text: json['text'] as String? ?? '',
-  );
+        role: json['role'] as String? ?? 'assistant',
+        text: json['text'] as String? ?? '',
+      );
 
   final String role;
   final String text;
+}
+
+class _PastedImage {
+  const _PastedImage({
+    required this.name,
+    required this.dataUrl,
+    required this.size,
+  });
+
+  final String name;
+  final String dataUrl;
+  final int size;
 }
 
 class AgentThreadHistory {
@@ -94,9 +106,8 @@ class AgentThreadHistory {
 
   String get title {
     if (name?.trim().isNotEmpty == true) return name!.trim();
-    final prompt = messages
-        .where((message) => message.role == 'user')
-        .firstOrNull;
+    final prompt =
+        messages.where((message) => message.role == 'user').firstOrNull;
     if (prompt == null || prompt.text.trim().isEmpty) return 'Untitled thread';
     return prompt.text.trim().replaceAll(RegExp(r'\s+'), ' ');
   }
@@ -110,29 +121,28 @@ class AgentWorkThread {
     this.updatedAt,
   });
 
-  factory AgentWorkThread.fromJson(Map<String, dynamic> json) => AgentWorkThread(
-    id: json['id'] as String? ?? '',
-    title: json['title'] as String? ?? 'Work thread',
-    updatedAt: json['updatedAt'] as String?,
-    messages: (json['messages'] as List<dynamic>? ?? const [])
-        .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
-        .toList(),
-  );
+  factory AgentWorkThread.fromJson(Map<String, dynamic> json) =>
+      AgentWorkThread(
+        id: json['id'] as String? ?? '',
+        title: json['title'] as String? ?? 'Work thread',
+        updatedAt: json['updatedAt'] as String?,
+        messages: (json['messages'] as List<dynamic>? ?? const [])
+            .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
+            .toList(),
+      );
 
   final String id;
   final String title;
   final String? updatedAt;
   final List<AgentMessage> messages;
 
-  AgentWorkThread withMessages(
-    List<AgentMessage> value, {
-    String? newTitle,
-  }) => AgentWorkThread(
-    id: id,
-    title: newTitle ?? title,
-    messages: value,
-    updatedAt: updatedAt,
-  );
+  AgentWorkThread withMessages(List<AgentMessage> value, {String? newTitle}) =>
+      AgentWorkThread(
+        id: id,
+        title: newTitle ?? title,
+        messages: value,
+        updatedAt: updatedAt,
+      );
 }
 
 class FreeqBot {
@@ -145,14 +155,14 @@ class FreeqBot {
   });
 
   factory FreeqBot.fromJson(Map<String, dynamic> json) => FreeqBot(
-    did: json['did'] as String? ?? '',
-    name: json['name'] as String? ?? 'Unknown bot',
-    description: json['description'] as String? ?? '',
-    capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
-        .map((value) => value.toString())
-        .toList(),
-    version: json['version'] as String? ?? '',
-  );
+        did: json['did'] as String? ?? '',
+        name: json['name'] as String? ?? 'Unknown bot',
+        description: json['description'] as String? ?? '',
+        capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
+            .map((value) => value.toString())
+            .toList(),
+        version: json['version'] as String? ?? '',
+      );
 
   final String did;
   final String name;
@@ -169,10 +179,10 @@ class GitChange {
   });
 
   factory GitChange.fromJson(Map<String, dynamic> json) => GitChange(
-    path: json['path'] as String? ?? '',
-    index: json['index'] as String? ?? ' ',
-    worktree: json['worktree'] as String? ?? ' ',
-  );
+        path: json['path'] as String? ?? '',
+        index: json['index'] as String? ?? ' ',
+        worktree: json['worktree'] as String? ?? ' ',
+      );
 
   final String path;
   final String index;
@@ -181,8 +191,8 @@ class GitChange {
   String get label => index == '?' || worktree == '?'
       ? 'New'
       : index != ' '
-      ? 'Staged'
-      : 'Modified';
+          ? 'Staged'
+          : 'Modified';
 }
 
 class GitStatus {
@@ -198,17 +208,17 @@ class GitStatus {
   });
 
   factory GitStatus.fromJson(Map<String, dynamic> json) => GitStatus(
-    isRepo: json['isRepo'] as bool? ?? false,
-    branch: json['branch'] as String? ?? '',
-    files: (json['files'] as List<dynamic>? ?? const [])
-        .map((item) => GitChange.fromJson(item as Map<String, dynamic>))
-        .toList(),
-    ahead: json['ahead'] as int? ?? 0,
-    behind: json['behind'] as int? ?? 0,
-    hasRemote: json['hasRemote'] as bool? ?? false,
-    hasUpstream: json['hasUpstream'] as bool? ?? false,
-    prAvailable: json['prAvailable'] as bool? ?? false,
-  );
+        isRepo: json['isRepo'] as bool? ?? false,
+        branch: json['branch'] as String? ?? '',
+        files: (json['files'] as List<dynamic>? ?? const [])
+            .map((item) => GitChange.fromJson(item as Map<String, dynamic>))
+            .toList(),
+        ahead: json['ahead'] as int? ?? 0,
+        behind: json['behind'] as int? ?? 0,
+        hasRemote: json['hasRemote'] as bool? ?? false,
+        hasUpstream: json['hasUpstream'] as bool? ?? false,
+        prAvailable: json['prAvailable'] as bool? ?? false,
+      );
 
   final bool isRepo;
   final String branch;
@@ -236,12 +246,12 @@ class _ApiException implements Exception {
 
 class FileTreeNode {
   FileTreeNode.directory(this.name, this.path)
-    : isDirectory = true,
-      children = [];
+      : isDirectory = true,
+        children = [];
 
   FileTreeNode.file(this.name, this.path)
-    : isDirectory = false,
-      children = const [];
+      : isDirectory = false,
+        children = const [];
 
   final String name;
   final String path;
@@ -257,10 +267,10 @@ class SyntaxRange {
   });
 
   factory SyntaxRange.fromJson(Map<Object?, Object?> json) => SyntaxRange(
-    start: json['start'] as int,
-    end: json['end'] as int,
-    kind: json['kind'] as String,
-  );
+        start: json['start'] as int,
+        end: json['end'] as int,
+        kind: json['kind'] as String,
+      );
 
   final int start;
   final int end;
@@ -305,21 +315,21 @@ class SyntaxHighlightingController extends TextEditingController {
   }
 
   TextStyle _styleFor(String kind) => switch (kind) {
-    'comment' => const TextStyle(
-      color: Color(0xFF8B949E),
-      fontStyle: FontStyle.italic,
-    ),
-    'string' => const TextStyle(color: Color(0xFFA5D6FF)),
-    'escape' => const TextStyle(color: Color(0xFFFFC680)),
-    'number' => const TextStyle(color: Color(0xFF79C0FF)),
-    'constant' => const TextStyle(color: Color(0xFFFF7B72)),
-    'keyword' => const TextStyle(
-      color: Color(0xFFFF7B72),
-      fontWeight: FontWeight.w600,
-    ),
-    'definition' => const TextStyle(color: Color(0xFFD2A8FF)),
-    _ => const TextStyle(color: Color(0xFFE6EDF3)),
-  };
+        'comment' => const TextStyle(
+            color: Color(0xFF8B949E),
+            fontStyle: FontStyle.italic,
+          ),
+        'string' => const TextStyle(color: Color(0xFFA5D6FF)),
+        'escape' => const TextStyle(color: Color(0xFFFFC680)),
+        'number' => const TextStyle(color: Color(0xFF79C0FF)),
+        'constant' => const TextStyle(color: Color(0xFFFF7B72)),
+        'keyword' => const TextStyle(
+            color: Color(0xFFFF7B72),
+            fontWeight: FontWeight.w600,
+          ),
+        'definition' => const TextStyle(color: Color(0xFFD2A8FF)),
+        _ => const TextStyle(color: Color(0xFFE6EDF3)),
+      };
 }
 
 const _terminalViewType = 'libghostty-terminal';
@@ -371,9 +381,8 @@ class _GhosttyTerminalState extends State<GhosttyTerminal> {
   }
 
   void _updatePointerEvents() {
-    _frame?.style.pointerEvents = _terminalInteractionEnabled.value
-        ? 'auto'
-        : 'none';
+    _frame?.style.pointerEvents =
+        _terminalInteractionEnabled.value ? 'auto' : 'none';
   }
 
   @override
@@ -384,10 +393,10 @@ class _GhosttyTerminalState extends State<GhosttyTerminal> {
 
   @override
   Widget build(BuildContext context) => HtmlElementView(
-    key: ValueKey(widget.sessionId),
-    viewType: _terminalViewType,
-    onPlatformViewCreated: _configureFrame,
-  );
+        key: ValueKey(widget.sessionId),
+        viewType: _terminalViewType,
+        onPlatformViewCreated: _configureFrame,
+      );
 }
 
 class TerminalSession {
@@ -424,30 +433,30 @@ class _CommitDialogState extends State<_CommitDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text(
-      'Commit ${widget.changedCount} changed file${widget.changedCount == 1 ? '' : 's'}',
-    ),
-    content: TextField(
-      controller: _message,
-      autofocus: true,
-      onChanged: (_) => setState(() {}),
-      onSubmitted: (_) => _commit(),
-      decoration: const InputDecoration(
-        labelText: 'Commit message',
-        helperText: 'Chosen by Codex; edit if needed.',
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FilledButton(
-        onPressed: _message.text.trim().isEmpty ? null : _commit,
-        child: const Text('Commit'),
-      ),
-    ],
-  );
+        title: Text(
+          'Commit ${widget.changedCount} changed file${widget.changedCount == 1 ? '' : 's'}',
+        ),
+        content: TextField(
+          controller: _message,
+          autofocus: true,
+          onChanged: (_) => setState(() {}),
+          onSubmitted: (_) => _commit(),
+          decoration: const InputDecoration(
+            labelText: 'Commit message',
+            helperText: 'Chosen by Codex; edit if needed.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: _message.text.trim().isEmpty ? null : _commit,
+            child: const Text('Commit'),
+          ),
+        ],
+      );
 
   void _commit() {
     final message = _message.text.trim();
@@ -471,6 +480,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   final _code = SyntaxHighlightingController();
   final _agentPrompt = TextEditingController();
+  final _agentPromptFocus = FocusNode();
   final _editorFocus = FocusNode();
   final _messagesScroll = ScrollController();
 
@@ -519,6 +529,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Timer? _highlightTimer;
   int _highlightRequest = 0;
   bool _applyingSyntaxHighlights = false;
+  final List<_PastedImage> _pastedImages = [];
+  StreamSubscription<html.ClipboardEvent>? _pasteSubscription;
+
+  static const _maximumPastedImages = 4;
+  static const _maximumPastedImageBytes = 10 * 1024 * 1024;
 
   bool get _dirty => _path != null && _code.text != _savedText;
 
@@ -528,15 +543,56 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       (MediaQuery.sizeOf(context).width - 48).clamp(280, maximum).toDouble();
 
   double _dialogHeight(BuildContext context, double maximum) =>
-      (MediaQuery.sizeOf(context).height - 180)
-          .clamp(240, maximum)
-          .toDouble();
+      (MediaQuery.sizeOf(context).height - 180).clamp(240, maximum).toDouble();
 
   @override
   void initState() {
     super.initState();
     _code.addListener(_onEdit);
+    _pasteSubscription = html.document.onPaste.listen(
+      (event) => unawaited(_handleImagePaste(event)),
+    );
     _loadInitial();
+  }
+
+  Future<void> _handleImagePaste(html.ClipboardEvent event) async {
+    if (!_agentPromptFocus.hasFocus || _agentBusy) return;
+    final files = event.clipboardData?.files ?? const <html.File>[];
+    final images =
+        files.where((file) => file.type.startsWith('image/')).toList();
+    if (images.isEmpty) return;
+    event.preventDefault();
+
+    final remaining = _maximumPastedImages - _pastedImages.length;
+    if (remaining <= 0) {
+      _showError('You can attach up to $_maximumPastedImages images per turn.');
+      return;
+    }
+
+    for (final file in images.take(remaining)) {
+      if (file.size > _maximumPastedImageBytes) {
+        _showError('${file.name} is larger than 10 MiB.');
+        continue;
+      }
+      try {
+        final reader = html.FileReader()..readAsDataUrl(file);
+        await reader.onLoad.first;
+        final dataUrl = reader.result;
+        if (!mounted || dataUrl is! String) continue;
+        setState(() {
+          _pastedImages.add(
+            _PastedImage(
+              name: file.name.isEmpty ? 'pasted-image' : file.name,
+              dataUrl: dataUrl,
+              size: file.size,
+            ),
+          );
+          _error = null;
+        });
+      } catch (error) {
+        _showError('Could not read the pasted image: $error');
+      }
+    }
   }
 
   void _onEdit() {
@@ -617,9 +673,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       url,
       method: method,
       sendData: body == null ? null : jsonEncode(body),
-      requestHeaders: body == null
-          ? const {}
-          : const {'Content-Type': 'application/json'},
+      requestHeaders:
+          body == null ? const {} : const {'Content-Type': 'application/json'},
     );
     final text = response.responseText ?? '';
     Map<String, dynamic> decoded = {};
@@ -805,8 +860,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             'decline',
             'timeout',
           }.contains(item['status']),
-        ))
-      return;
+        )) return;
     _freeqPoller = Timer.periodic(const Duration(seconds: 5), (_) async {
       final project = _project;
       if (project == null) return;
@@ -887,8 +941,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         capability = capabilities.contains(rememberedCapability)
             ? rememberedCapability
             : capabilities.isEmpty
-            ? null
-            : capabilities.first;
+                ? null
+                : capabilities.first;
       } catch (error) {
         discoveryError = error.toString();
       } finally {
@@ -1068,41 +1122,46 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   String _freeqStatusLabel(String status) => switch (status) {
-    'offered' => 'Waiting for a bot',
-    'claimed' || 'accepted' => 'Claimed',
-    'incorporating' => 'Adding result to this thread',
-    'waiting_to_incorporate' => 'Waiting to add result',
-    'complete' => 'Completed',
-    'incorporated' => 'Incorporated',
-    'fail' => 'Failed',
-    'decline' => 'Declined',
-    'timeout' => 'Timed out',
-    _ => status.replaceAll('_', ' '),
-  };
+        'offered' => 'Waiting for a bot',
+        'claimed' || 'accepted' => 'Claimed',
+        'incorporating' => 'Adding result to this thread',
+        'waiting_to_incorporate' => 'Waiting to add result',
+        'complete' => 'Completed',
+        'incorporated' => 'Incorporated',
+        'fail' => 'Failed',
+        'decline' => 'Declined',
+        'timeout' => 'Timed out',
+        _ => status.replaceAll('_', ' '),
+      };
 
   IconData _freeqStatusIcon(String status) => switch (status) {
-    'offered' => Icons.schedule_outlined,
-    'claimed' || 'accepted' => Icons.person_pin_circle_outlined,
-    'incorporating' || 'waiting_to_incorporate' => Icons.sync_outlined,
-    'complete' => Icons.check_circle_outline,
-    'incorporated' => Icons.task_alt_outlined,
-    'fail' || 'decline' || 'timeout' => Icons.error_outline,
-    _ => Icons.hub_outlined,
-  };
+        'offered' => Icons.schedule_outlined,
+        'claimed' || 'accepted' => Icons.person_pin_circle_outlined,
+        'incorporating' || 'waiting_to_incorporate' => Icons.sync_outlined,
+        'complete' => Icons.check_circle_outline,
+        'incorporated' => Icons.task_alt_outlined,
+        'fail' || 'decline' || 'timeout' => Icons.error_outline,
+        _ => Icons.hub_outlined,
+      };
 
   Color _freeqStatusColor(String status) => switch (status) {
-    'claimed' || 'accepted' => const Color(0xFF79C0FF),
-    'incorporating' || 'waiting_to_incorporate' => const Color(0xFFD2A8FF),
-    'complete' => const Color(0xFF7EE787),
-    'incorporated' => const Color(0xFF7EE787),
-    'fail' || 'decline' || 'timeout' => const Color(0xFFFF7B72),
-    _ => const Color(0xFFE3B341),
-  };
+        'claimed' || 'accepted' => const Color(0xFF79C0FF),
+        'incorporating' || 'waiting_to_incorporate' => const Color(0xFFD2A8FF),
+        'complete' => const Color(0xFF7EE787),
+        'incorporated' => const Color(0xFF7EE787),
+        'fail' || 'decline' || 'timeout' => const Color(0xFFFF7B72),
+        _ => const Color(0xFFE3B341),
+      };
 
   bool _isFinishedFreeqHandoff(String status) => switch (status) {
-    'complete' || 'incorporated' || 'fail' || 'decline' || 'timeout' => true,
-    _ => false,
-  };
+        'complete' ||
+        'incorporated' ||
+        'fail' ||
+        'decline' ||
+        'timeout' =>
+          true,
+        _ => false,
+      };
 
   void _openExternalUrl(String value) {
     final uri = Uri.tryParse(value);
@@ -1113,20 +1172,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Widget _externalLink(String value, {String? label}) => TextButton.icon(
-    onPressed: () => _openExternalUrl(value),
-    style: TextButton.styleFrom(
-      padding: EdgeInsets.zero,
-      minimumSize: Size.zero,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      alignment: Alignment.centerLeft,
-    ),
-    icon: const Icon(Icons.open_in_new, size: 13),
-    label: Text(
-      label ?? value,
-      overflow: TextOverflow.ellipsis,
-      style: const TextStyle(decoration: TextDecoration.underline),
-    ),
-  );
+        onPressed: () => _openExternalUrl(value),
+        style: TextButton.styleFrom(
+          padding: EdgeInsets.zero,
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          alignment: Alignment.centerLeft,
+        ),
+        icon: const Icon(Icons.open_in_new, size: 13),
+        label: Text(
+          label ?? value,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(decoration: TextDecoration.underline),
+        ),
+      );
 
   Widget _messageText(String value) {
     final matches = RegExp(r'https?://[^\s<>()]+').allMatches(value).toList();
@@ -1543,9 +1602,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               child: const Text('Close'),
             ),
             FilledButton(
-              onPressed: diff.isEmpty
-                  ? null
-                  : () => Navigator.pop(context, true),
+              onPressed:
+                  diff.isEmpty ? null : () => Navigator.pop(context, true),
               child: const Text('Incorporate changes'),
             ),
           ],
@@ -2114,7 +2172,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Future<void> _selectWorkThread(String threadId) async {
     if (_activeWorkThreadId == threadId || _project == null) return;
     if (_dirty && !await _confirmDiscard()) return;
-    final thread = _workThreads.where((item) => item.id == threadId).firstOrNull;
+    final thread =
+        _workThreads.where((item) => item.id == threadId).firstOrNull;
     if (thread == null) return;
     _closeActiveCheckoutTerminals();
     setState(() {
@@ -2138,7 +2197,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Future<void> _runAgent() async {
     if (_project == null || _agentBusy) return;
     final prompt = _agentPrompt.text.trim();
-    if (prompt.isEmpty) return;
+    if (prompt.isEmpty && _pastedImages.isEmpty) return;
     if (!_codexConnected) {
       _showError('Connect Codex before starting an agent turn.');
       return;
@@ -2149,23 +2208,34 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
     final workThreadId = _activeWorkThreadId;
     if (workThreadId == null) return;
+    final pastedImages = List<_PastedImage>.of(_pastedImages);
+    final displayPrompt = [
+      if (prompt.isNotEmpty) prompt,
+      if (pastedImages.isNotEmpty)
+        '[${pastedImages.length} image${pastedImages.length == 1 ? '' : 's'} attached]',
+    ].join('\n');
     setState(() {
       _runningWorkThreads.add(workThreadId);
       _agentBusy = true;
       _agentPrompt.clear();
-      _messages = [..._messages, AgentMessage(role: 'user', text: prompt)];
+      _pastedImages.clear();
+      _messages = [
+        ..._messages,
+        AgentMessage(role: 'user', text: displayPrompt),
+      ];
       _agentActivity = const ['Starting Codex…'];
       _streamedResponse = '';
       _workThreadActivity[workThreadId] = _agentActivity;
       _workThreadStreams[workThreadId] = '';
-      final currentThread = _workThreads
-          .where((thread) => thread.id == workThreadId)
-          .firstOrNull;
+      final currentThread =
+          _workThreads.where((thread) => thread.id == workThreadId).firstOrNull;
       _updateWorkThreadMessages(
         workThreadId,
         _messages,
         title: currentThread?.title.startsWith('Work thread ') == true
-            ? (prompt.length <= 48 ? prompt : prompt.substring(0, 48))
+            ? (displayPrompt.length <= 48
+                ? displayPrompt
+                : displayPrompt.substring(0, 48))
             : null,
       );
       _error = null;
@@ -2175,6 +2245,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       final started = await _request('POST', _projectUrl('/agent'), {
         'prompt': prompt,
         'threadId': workThreadId,
+        'images': pastedImages.map((image) => image.dataUrl).toList(),
       });
       final runId = started['runId'] as String?;
       if (runId == null || runId.isEmpty) {
@@ -2193,9 +2264,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             setState(() {
               final previous = _workThreadActivity[workThreadId] ?? const [];
               final next = [...previous, activity];
-              final values = next.length > 12
-                  ? next.sublist(next.length - 12)
-                  : next;
+              final values =
+                  next.length > 12 ? next.sublist(next.length - 12) : next;
               _workThreadActivity[workThreadId] = values;
               if (_activeWorkThreadId == workThreadId) _agentActivity = values;
             });
@@ -2221,8 +2291,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   )
                   .toList();
             } else if ((_workThreadStreams[workThreadId] ?? '').isEmpty) {
-              final existing =
-                  _workThreads
+              final existing = _workThreads
                       .where((thread) => thread.id == workThreadId)
                       .firstOrNull
                       ?.messages ??
@@ -2364,9 +2433,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     name.dispose();
     if (result == null) return;
     try {
-      await _request('POST', _projectUrl('/session/threads'), {
-        'name': result,
-      });
+      await _request('POST', _projectUrl('/session/threads'), {'name': result});
       _closeActiveCheckoutTerminals();
       _clearActiveCheckoutView();
       await _loadSession();
@@ -2378,14 +2445,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _archiveWorkThread(AgentWorkThread thread) async {
     if (_project == null || _runningWorkThreads.contains(thread.id)) return;
-    final confirmed =
-        await showDialog<bool>(
+    final confirmed = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Archive work thread?'),
-            content: Text(
-              'Move “${thread.title}” to Previous work threads?',
-            ),
+            content: Text('Move “${thread.title}” to Previous work threads?'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
@@ -2476,9 +2540,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
-  Future<void> _reactivateHistoricalThread(
-    AgentThreadHistory thread,
-  ) async {
+  Future<void> _reactivateHistoricalThread(AgentThreadHistory thread) async {
     if (_project == null || thread.archivedAt == null) return;
     try {
       await _request('POST', _projectUrl('/session/reactivate'), {
@@ -2493,9 +2555,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
-  Future<bool> _showHistoricalThread(
-    AgentThreadHistory thread,
-  ) async =>
+  Future<bool> _showHistoricalThread(AgentThreadHistory thread) async =>
       await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -2514,9 +2574,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 final message = thread.messages[index];
                 final user = message.role == 'user';
                 return Align(
-                  alignment: user
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
+                  alignment:
+                      user ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
@@ -2593,10 +2652,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                       style: TextButton.styleFrom(
                                         foregroundColor:
                                             _activeTerminalId == terminal.id
-                                            ? Theme.of(context)
-                                                  .colorScheme
-                                                  .primary
-                                            : null,
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .primary
+                                                : null,
                                       ),
                                       child: Text(terminal.label),
                                     ),
@@ -2618,8 +2677,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                           return;
                                         }
                                         setDialogState(() {
-                                          final closedIndex = _terminals
-                                              .indexOf(terminal);
+                                          final closedIndex =
+                                              _terminals.indexOf(terminal);
                                           _terminals.remove(terminal);
                                           if (_activeTerminalId ==
                                                   terminal.id &&
@@ -2690,10 +2749,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   void _newTerminal() => setState(() {
-    final terminal = TerminalSession(_nextTerminalId++);
-    _terminals.add(terminal);
-    _activeTerminalId = terminal.id;
-  });
+        final terminal = TerminalSession(_nextTerminalId++);
+        _terminals.add(terminal);
+        _activeTerminalId = terminal.id;
+      });
 
   void _closeTerminalTab(TerminalSession terminal) {
     final project = _project;
@@ -2705,7 +2764,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         _activeTerminalId = _terminals.isEmpty
             ? null
             : _terminals[closedIndex.clamp(0, _terminals.length - 1).toInt()]
-                  .id;
+                .id;
       }
       if (_terminals.isEmpty) _terminalVisible = false;
     });
@@ -2753,9 +2812,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void _logout() => html.window.location.assign('/auth/logout');
 
   String get _userInitial {
-    final value = _userName.trim().isEmpty
-        ? _userEmail.trim()
-        : _userName.trim();
+    final value =
+        _userName.trim().isEmpty ? _userEmail.trim() : _userName.trim();
     return value.isEmpty ? '?' : value.characters.first.toUpperCase();
   }
 
@@ -2768,6 +2826,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   @override
   void dispose() {
+    _pasteSubscription?.cancel();
     _loginEvents?.close();
     for (final source in _agentEventSources.values) {
       source.close();
@@ -2777,6 +2836,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     _code.removeListener(_onEdit);
     _code.dispose();
     _agentPrompt.dispose();
+    _agentPromptFocus.dispose();
     _editorFocus.dispose();
     _messagesScroll.dispose();
     super.dispose();
@@ -2784,51 +2844,52 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   @override
   Widget build(BuildContext context) => Shortcuts(
-    shortcuts: const {
-      SingleActivator(LogicalKeyboardKey.keyS, control: true): SaveIntent(),
-      SingleActivator(LogicalKeyboardKey.keyS, meta: true): SaveIntent(),
-    },
-    child: Actions(
-      actions: {
-        SaveIntent: CallbackAction<SaveIntent>(
-          onInvoke: (_) {
-            _save();
-            return null;
-          },
-        ),
-      },
-      child: Scaffold(
-        appBar: _buildAppBar(),
-        body: Column(
-          children: [
-            if (_error != null)
-              MaterialBanner(
-                content: SelectableText(_error!),
-                actions: [
-                  TextButton(
-                    onPressed: () => setState(() => _error = null),
-                    child: const Text('Dismiss'),
-                  ),
-                ],
-              ),
-            if (_loginCode != null) _buildLoginBanner(),
-            if (_loading) const LinearProgressIndicator(minHeight: 2),
-            Expanded(
-              child: _project == null ? _buildEmptyState() : _buildWorkspace(),
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.keyS, control: true): SaveIntent(),
+          SingleActivator(LogicalKeyboardKey.keyS, meta: true): SaveIntent(),
+        },
+        child: Actions(
+          actions: {
+            SaveIntent: CallbackAction<SaveIntent>(
+              onInvoke: (_) {
+                _save();
+                return null;
+              },
             ),
-          ],
+          },
+          child: Scaffold(
+            appBar: _buildAppBar(),
+            body: Column(
+              children: [
+                if (_error != null)
+                  MaterialBanner(
+                    content: SelectableText(_error!),
+                    actions: [
+                      TextButton(
+                        onPressed: () => setState(() => _error = null),
+                        child: const Text('Dismiss'),
+                      ),
+                    ],
+                  ),
+                if (_loginCode != null) _buildLoginBanner(),
+                if (_loading) const LinearProgressIndicator(minHeight: 2),
+                Expanded(
+                  child:
+                      _project == null ? _buildEmptyState() : _buildWorkspace(),
+                ),
+              ],
+            ),
+          ),
         ),
-      ),
-    ),
-  );
+      );
 
   PreferredSizeWidget _buildAppBar() {
     final project = _project;
     final projectLabel = project == null
         ? 'Codex Workspace'
         : project.repoUrl.isEmpty
-        ? project.name
-        : project.repoUrl;
+            ? project.name
+            : project.repoUrl;
 
     if (MediaQuery.sizeOf(context).width < 1100) {
       return _buildMobileAppBar(project);
@@ -2992,223 +3053,223 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   PreferredSizeWidget _buildMobileAppBar(ProjectSummary? project) => AppBar(
-    titleSpacing: 12,
-    title: Row(
-      children: [
-        const Icon(Icons.auto_awesome, size: 20),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _projects.isEmpty
-              ? Text(
-                  project?.name ?? 'Codex Workspace',
-                  overflow: TextOverflow.ellipsis,
-                )
-              : DropdownButtonHideUnderline(
-                  child: DropdownButton<ProjectSummary>(
-                    value: project,
-                    isExpanded: true,
-                    hint: const Text('Select project'),
-                    items: _projects
-                        .map(
-                          (item) => DropdownMenuItem(
-                            value: item,
-                            child: Text(
-                              item.name,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value != null) _selectProject(value);
-                    },
+        titleSpacing: 12,
+        title: Row(
+          children: [
+            const Icon(Icons.auto_awesome, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _projects.isEmpty
+                  ? Text(
+                      project?.name ?? 'Codex Workspace',
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : DropdownButtonHideUnderline(
+                      child: DropdownButton<ProjectSummary>(
+                        value: project,
+                        isExpanded: true,
+                        hint: const Text('Select project'),
+                        items: _projects
+                            .map(
+                              (item) => DropdownMenuItem(
+                                value: item,
+                                child: Text(
+                                  item.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) _selectProject(value);
+                        },
+                      ),
+                    ),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: _terminalVisible ? 'Hide terminal' : 'Show terminal',
+            onPressed: project == null ? null : _openTerminal,
+            icon: const Icon(Icons.terminal),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Workspace actions',
+            onSelected: (value) {
+              if (value == 'create') _createProject();
+              if (value == 'connect') _connectCodex();
+              if (value == 'rename') _renameProject();
+              if (value == 'close') _closeProject();
+              if (value == 'logout') _logout();
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'create',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.add),
+                  title: Text('Add project'),
+                ),
+              ),
+              if (!_codexConnected)
+                const PopupMenuItem(
+                  value: 'connect',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.link),
+                    title: Text('Connect Codex'),
                   ),
                 ),
-        ),
-      ],
-    ),
-    actions: [
-      IconButton(
-        tooltip: _terminalVisible ? 'Hide terminal' : 'Show terminal',
-        onPressed: project == null ? null : _openTerminal,
-        icon: const Icon(Icons.terminal),
-      ),
-      PopupMenuButton<String>(
-        tooltip: 'Workspace actions',
-        onSelected: (value) {
-          if (value == 'create') _createProject();
-          if (value == 'connect') _connectCodex();
-          if (value == 'rename') _renameProject();
-          if (value == 'close') _closeProject();
-          if (value == 'logout') _logout();
-        },
-        itemBuilder: (context) => [
-          const PopupMenuItem(
-            value: 'create',
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.add),
-              title: Text('Add project'),
-            ),
-          ),
-          if (!_codexConnected)
-            const PopupMenuItem(
-              value: 'connect',
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.link),
-                title: Text('Connect Codex'),
+              if (project != null) ...[
+                const PopupMenuItem(
+                  value: 'rename',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.drive_file_rename_outline),
+                    title: Text('Rename project'),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'close',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.close),
+                    title: Text('Close project'),
+                  ),
+                ),
+              ],
+              PopupMenuItem<String>(
+                enabled: false,
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(child: Text(_userInitial)),
+                  title: Text(_userName.isEmpty ? 'Account' : _userName),
+                  subtitle: _userEmail.isEmpty ? null : Text(_userEmail),
+                ),
               ),
-            ),
-          if (project != null) ...[
-            const PopupMenuItem(
-              value: 'rename',
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.drive_file_rename_outline),
-                title: Text('Rename project'),
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'close',
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.close),
-                title: Text('Close project'),
-              ),
-            ),
-          ],
-          PopupMenuItem<String>(
-            enabled: false,
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: CircleAvatar(child: Text(_userInitial)),
-              title: Text(_userName.isEmpty ? 'Account' : _userName),
-              subtitle: _userEmail.isEmpty ? null : Text(_userEmail),
-            ),
-          ),
-          const PopupMenuItem(
-            value: 'logout',
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.logout),
-              title: Text('Log out'),
-            ),
-          ),
-        ],
-      ),
-    ],
-  );
-
-  Widget _buildLoginBanner() => MaterialBanner(
-    leading: const Icon(Icons.login),
-    content: SelectableText(
-      'Open the Codex sign-in page and enter code $_loginCode.',
-    ),
-    actions: [
-      FilledButton(
-        onPressed: _loginUrl == null
-            ? null
-            : () => html.window.open(_loginUrl!, 'codex-login'),
-        child: const Text('Open sign-in'),
-      ),
-    ],
-  );
-
-  Widget _buildEmptyState() => Center(
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: Card(
-        child: Padding(
-          padding: EdgeInsets.all(_isMobile ? 20 : 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.folder_copy_outlined, size: 54),
-              const SizedBox(height: 20),
-              Text(
-                'Open a durable workspace',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'Create a folder or clone a repository. Files and Codex threads are stored on the project disk and survive redeploys.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: _createProject,
-                icon: const Icon(Icons.add),
-                label: const Text('Add project'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-
-  Widget _buildWorkspace() => LayoutBuilder(
-    builder: (context, constraints) {
-      final maxTerminalHeight = (constraints.maxHeight - 180)
-          .clamp(160, 640)
-          .toDouble();
-      final terminalHeight = _terminalHeight
-          .clamp(160, maxTerminalHeight)
-          .toDouble();
-      if (constraints.maxWidth < 900) {
-        return DefaultTabController(
-          length: 3,
-          child: Column(
-            children: [
-              const TabBar(
-                tabs: [
-                  Tab(icon: Icon(Icons.folder_outlined), text: 'Files'),
-                  Tab(icon: Icon(Icons.edit_outlined), text: 'Editor'),
-                  Tab(icon: Icon(Icons.auto_awesome_outlined), text: 'Agent'),
-                ],
-              ),
-              Expanded(
-                child: TabBarView(
-                  children: [_buildFiles(), _buildEditor(), _buildAgent()],
+              const PopupMenuItem(
+                value: 'logout',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.logout),
+                  title: Text('Log out'),
                 ),
               ),
             ],
           ),
-        );
-      }
-      return Column(
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                SizedBox(width: 250, child: _buildFiles()),
-                const VerticalDivider(width: 1),
-                Expanded(child: _buildEditor()),
-                const VerticalDivider(width: 1),
-                SizedBox(width: 390, child: _buildAgent()),
-              ],
-            ),
-          ),
-          if (_terminalVisible && _terminals.isNotEmpty) ...[
-            MouseRegion(
-              cursor: SystemMouseCursors.resizeUpDown,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onVerticalDragUpdate: (details) => setState(() {
-                  _terminalHeight = (_terminalHeight - details.delta.dy)
-                      .clamp(160, maxTerminalHeight)
-                      .toDouble();
-                }),
-                child: const SizedBox(height: 6, child: Divider(height: 1)),
-              ),
-            ),
-            SizedBox(height: terminalHeight, child: _buildTerminalPanel()),
-          ],
         ],
       );
-    },
-  );
+
+  Widget _buildLoginBanner() => MaterialBanner(
+        leading: const Icon(Icons.login),
+        content: SelectableText(
+          'Open the Codex sign-in page and enter code $_loginCode.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: _loginUrl == null
+                ? null
+                : () => html.window.open(_loginUrl!, 'codex-login'),
+            child: const Text('Open sign-in'),
+          ),
+        ],
+      );
+
+  Widget _buildEmptyState() => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.all(_isMobile ? 20 : 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.folder_copy_outlined, size: 54),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Open a durable workspace',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Create a folder or clone a repository. Files and Codex threads are stored on the project disk and survive redeploys.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: _createProject,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add project'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _buildWorkspace() => LayoutBuilder(
+        builder: (context, constraints) {
+          final maxTerminalHeight =
+              (constraints.maxHeight - 180).clamp(160, 640).toDouble();
+          final terminalHeight =
+              _terminalHeight.clamp(160, maxTerminalHeight).toDouble();
+          if (constraints.maxWidth < 900) {
+            return DefaultTabController(
+              length: 3,
+              child: Column(
+                children: [
+                  const TabBar(
+                    tabs: [
+                      Tab(icon: Icon(Icons.folder_outlined), text: 'Files'),
+                      Tab(icon: Icon(Icons.edit_outlined), text: 'Editor'),
+                      Tab(
+                          icon: Icon(Icons.auto_awesome_outlined),
+                          text: 'Agent'),
+                    ],
+                  ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [_buildFiles(), _buildEditor(), _buildAgent()],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          return Column(
+            children: [
+              Expanded(
+                child: Row(
+                  children: [
+                    SizedBox(width: 250, child: _buildFiles()),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: _buildEditor()),
+                    const VerticalDivider(width: 1),
+                    SizedBox(width: 390, child: _buildAgent()),
+                  ],
+                ),
+              ),
+              if (_terminalVisible && _terminals.isNotEmpty) ...[
+                MouseRegion(
+                  cursor: SystemMouseCursors.resizeUpDown,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragUpdate: (details) => setState(() {
+                      _terminalHeight = (_terminalHeight - details.delta.dy)
+                          .clamp(160, maxTerminalHeight)
+                          .toDouble();
+                    }),
+                    child: const SizedBox(height: 6, child: Divider(height: 1)),
+                  ),
+                ),
+                SizedBox(height: terminalHeight, child: _buildTerminalPanel()),
+              ],
+            ],
+          );
+        },
+      );
 
   Widget _buildTerminalPanel() {
     final project = _project;
@@ -3282,143 +3343,145 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Widget _panelHeader(String title, List<Widget> actions) => Container(
-    constraints: const BoxConstraints(minHeight: 48),
-    padding: const EdgeInsets.symmetric(horizontal: 12),
-    decoration: const BoxDecoration(
-      border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
-    ),
-    child: Row(
-      children: [
-        Expanded(
-          child: Text(
-            title,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelLarge,
-          ),
+        constraints: const BoxConstraints(minHeight: 48),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
         ),
-        ...actions,
-      ],
-    ),
-  );
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ),
+            ...actions,
+          ],
+        ),
+      );
 
   Widget _buildFiles() => Column(
-    children: [
-      _panelHeader('EXPLORER', [
-        IconButton(
-          tooltip: 'Refresh',
-          visualDensity: VisualDensity.compact,
-          onPressed: _refreshTree,
-          icon: const Icon(Icons.refresh, size: 18),
-        ),
-      ]),
-      Expanded(
-        child: _files.isEmpty
-            ? const Center(child: Text('No files'))
-            : Builder(
-                builder: (context) {
-                  final nodes = _visibleTreeNodes();
-                  return ListView.builder(
-                    itemCount: nodes.length,
-                    itemBuilder: (context, index) {
-                      final (node, depth) = nodes[index];
-                      final isExpanded = _expandedDirectories.contains(
-                        node.path,
-                      );
-                      return ListTile(
-                        dense: !_isMobile,
-                        selected: !node.isDirectory && node.path == _path,
-                        minLeadingWidth: 24,
-                        horizontalTitleGap: 4,
-                        contentPadding: EdgeInsets.only(
-                          left: 10.0 + depth * 10,
-                          right: 8,
-                        ),
-                        leading: node.isDirectory
-                            ? Icon(
-                                isExpanded
-                                    ? Icons.folder_open_outlined
-                                    : Icons.folder_outlined,
-                                size: 18,
-                                color: const Color(0xFFD6A84A),
-                              )
-                            : const Icon(Icons.description_outlined, size: 17),
-                        title: Text(
-                          node.name,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                        onTap: node.isDirectory
-                            ? () => setState(() {
-                                if (isExpanded) {
-                                  _expandedDirectories.remove(node.path);
-                                } else {
-                                  _expandedDirectories.add(node.path);
-                                }
-                              })
-                            : () {
-                                unawaited(_openFile(node.path));
-                                if (_isMobile) {
-                                  DefaultTabController.of(context).animateTo(1);
-                                }
-                              },
+        children: [
+          _panelHeader('EXPLORER', [
+            IconButton(
+              tooltip: 'Refresh',
+              visualDensity: VisualDensity.compact,
+              onPressed: _refreshTree,
+              icon: const Icon(Icons.refresh, size: 18),
+            ),
+          ]),
+          Expanded(
+            child: _files.isEmpty
+                ? const Center(child: Text('No files'))
+                : Builder(
+                    builder: (context) {
+                      final nodes = _visibleTreeNodes();
+                      return ListView.builder(
+                        itemCount: nodes.length,
+                        itemBuilder: (context, index) {
+                          final (node, depth) = nodes[index];
+                          final isExpanded = _expandedDirectories.contains(
+                            node.path,
+                          );
+                          return ListTile(
+                            dense: !_isMobile,
+                            selected: !node.isDirectory && node.path == _path,
+                            minLeadingWidth: 24,
+                            horizontalTitleGap: 4,
+                            contentPadding: EdgeInsets.only(
+                              left: 10.0 + depth * 10,
+                              right: 8,
+                            ),
+                            leading: node.isDirectory
+                                ? Icon(
+                                    isExpanded
+                                        ? Icons.folder_open_outlined
+                                        : Icons.folder_outlined,
+                                    size: 18,
+                                    color: const Color(0xFFD6A84A),
+                                  )
+                                : const Icon(Icons.description_outlined,
+                                    size: 17),
+                            title: Text(
+                              node.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            onTap: node.isDirectory
+                                ? () => setState(() {
+                                      if (isExpanded) {
+                                        _expandedDirectories.remove(node.path);
+                                      } else {
+                                        _expandedDirectories.add(node.path);
+                                      }
+                                    })
+                                : () {
+                                    unawaited(_openFile(node.path));
+                                    if (_isMobile) {
+                                      DefaultTabController.of(context)
+                                          .animateTo(1);
+                                    }
+                                  },
+                          );
+                        },
                       );
                     },
-                  );
-                },
-              ),
-      ),
-    ],
-  );
+                  ),
+          ),
+        ],
+      );
 
   Widget _buildEditor() => Column(
-    children: [
-      _panelHeader(
-        _path == null ? 'EDITOR' : '${_path!}${_dirty ? ' •' : ''}',
-        [
-          if (_saving)
-            const Padding(
-              padding: EdgeInsets.all(10),
-              child: SizedBox.square(
-                dimension: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else
-            IconButton(
-              tooltip: 'Save (Ctrl/Cmd+S)',
-              visualDensity: VisualDensity.compact,
-              onPressed: _path == null ? null : _save,
-              icon: const Icon(Icons.save_outlined, size: 18),
-            ),
-        ],
-      ),
-      Expanded(
-        child: _path == null
-            ? const Center(child: Text('Select a file from the explorer'))
-            : Padding(
-                padding: EdgeInsets.all(_isMobile ? 10 : 16),
-                child: TextField(
-                  controller: _code,
-                  focusNode: _editorFocus,
-                  expands: true,
-                  maxLines: null,
-                  minLines: null,
-                  keyboardType: TextInputType.multiline,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 13.5,
-                    height: 1.5,
+        children: [
+          _panelHeader(
+            _path == null ? 'EDITOR' : '${_path!}${_dirty ? ' •' : ''}',
+            [
+              if (_saving)
+                const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    filled: false,
-                    contentPadding: EdgeInsets.zero,
-                  ),
+                )
+              else
+                IconButton(
+                  tooltip: 'Save (Ctrl/Cmd+S)',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _path == null ? null : _save,
+                  icon: const Icon(Icons.save_outlined, size: 18),
                 ),
-              ),
-      ),
-    ],
-  );
+            ],
+          ),
+          Expanded(
+            child: _path == null
+                ? const Center(child: Text('Select a file from the explorer'))
+                : Padding(
+                    padding: EdgeInsets.all(_isMobile ? 10 : 16),
+                    child: TextField(
+                      controller: _code,
+                      focusNode: _editorFocus,
+                      expands: true,
+                      maxLines: null,
+                      minLines: null,
+                      keyboardType: TextInputType.multiline,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13.5,
+                        height: 1.5,
+                      ),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        filled: false,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ),
+          ),
+        ],
+      );
 
   Widget _buildAgent() {
     final gitStatus = _gitStatus;
@@ -3513,17 +3576,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       IconButton(
         tooltip: 'Create isolated Git worktree',
         visualDensity: VisualDensity.compact,
-        onPressed: _project?.isRepo == true && !_gitBusy
-            ? _createWorktree
-            : null,
+        onPressed:
+            _project?.isRepo == true && !_gitBusy ? _createWorktree : null,
         icon: const Icon(Icons.account_tree_outlined, size: 18),
       ),
       IconButton(
         tooltip: 'Refresh source control',
         visualDensity: VisualDensity.compact,
-        onPressed: _project?.isRepo == true && !_gitBusy
-            ? _refreshGitStatus
-            : null,
+        onPressed:
+            _project?.isRepo == true && !_gitBusy ? _refreshGitStatus : null,
         icon: const Icon(Icons.sync_outlined, size: 18),
       ),
       IconButton(
@@ -3594,9 +3655,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   foregroundColor: selected
                       ? const Color(0xFFB6C8FF)
                       : const Color(0xFF8B949E),
-                  backgroundColor: selected
-                      ? const Color(0xFF1F2A44)
-                      : Colors.transparent,
+                  backgroundColor:
+                      selected ? const Color(0xFF1F2A44) : Colors.transparent,
                   shape: const RoundedRectangleBorder(),
                   padding: const EdgeInsets.symmetric(
                     vertical: 12,
@@ -3612,271 +3672,325 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Widget _buildWorkThreadSwitcher() => Container(
-    height: 46,
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-    decoration: const BoxDecoration(
-      color: Color(0xFF0D1117),
-      border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
-    ),
-    child: Row(
-      children: [
-        Expanded(
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: _workThreads.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 6),
-            itemBuilder: (context, index) {
-              final thread = _workThreads[index];
-              final selected = thread.id == _activeWorkThreadId;
-              final running = _runningWorkThreads.contains(thread.id);
-              return Tooltip(
-                message: thread.title,
-                child: InputChip(
-                  selected: selected,
-                  showCheckmark: false,
-                  onSelected: (_) => _selectWorkThread(thread.id),
-                  onDeleted: running ? null : () => _archiveWorkThread(thread),
-                  deleteIcon: const Icon(Icons.archive_outlined, size: 16),
-                  deleteButtonTooltipMessage: running
-                      ? 'Stop this thread before archiving it'
-                      : 'Archive ${thread.title}',
-                  avatar: running
-                      ? const SizedBox.square(
-                          dimension: 12,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(
-                          thread.messages.isEmpty
-                              ? Icons.chat_bubble_outline
-                              : Icons.chat_bubble,
-                          size: 14,
-                        ),
-                  label: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 130),
-                    child: Text(
-                      thread.title,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  visualDensity: VisualDensity.compact,
-                ),
-              );
-            },
-          ),
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: const BoxDecoration(
+          color: Color(0xFF0D1117),
+          border: Border(bottom: BorderSide(color: Color(0xFF30363D))),
         ),
-        const SizedBox(width: 6),
-        IconButton(
-          tooltip: 'New parallel work thread',
-          visualDensity: VisualDensity.compact,
-          onPressed: _createWorkThread,
-          icon: const Icon(Icons.add, size: 18),
-        ),
-      ],
-    ),
-  );
-
-  Widget _buildAgentConversation() => Column(
-    children: [
-      Expanded(
-        child: _messages.isEmpty
-            ? Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.auto_awesome_outlined, size: 42),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Ask Codex to work in ${_project?.name}',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'It can inspect the repository, edit files, and run checks inside this project.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              )
-            : ListView.builder(
-                controller: _messagesScroll,
-                padding: const EdgeInsets.all(12),
-                itemCount: _messages.length + (_agentBusy ? 1 : 0),
+        child: Row(
+          children: [
+            Expanded(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _workThreads.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 6),
                 itemBuilder: (context, index) {
-                  if (index == _messages.length) {
-                    return Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                              SizedBox(width: 10),
-                              Text(
-                                _agentStopping
-                                    ? 'Stopping Codex…'
-                                    : 'Codex is working…',
-                              ),
-                            ],
-                          ),
-                          if (_agentActivity.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF161B22),
-                                border: Border.all(
-                                  color: const Color(0xFF30363D),
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: _agentActivity
-                                    .map(
-                                      (activity) => Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 4,
-                                        ),
-                                        child: Text('• $activity'),
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
+                  final thread = _workThreads[index];
+                  final selected = thread.id == _activeWorkThreadId;
+                  final running = _runningWorkThreads.contains(thread.id);
+                  return Tooltip(
+                    message: thread.title,
+                    child: InputChip(
+                      selected: selected,
+                      showCheckmark: false,
+                      onSelected: (_) => _selectWorkThread(thread.id),
+                      onDeleted:
+                          running ? null : () => _archiveWorkThread(thread),
+                      deleteIcon: const Icon(Icons.archive_outlined, size: 16),
+                      deleteButtonTooltipMessage: running
+                          ? 'Stop this thread before archiving it'
+                          : 'Archive ${thread.title}',
+                      avatar: running
+                          ? const SizedBox.square(
+                              dimension: 12,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              thread.messages.isEmpty
+                                  ? Icons.chat_bubble_outline
+                                  : Icons.chat_bubble,
+                              size: 14,
                             ),
-                          ],
-                          if (_streamedResponse.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF161B22),
-                                border: Border.all(
-                                  color: const Color(0xFF30363D),
-                                ),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: _messageText(_streamedResponse),
-                            ),
-                          ],
-                        ],
+                      label: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 130),
+                        child:
+                            Text(thread.title, overflow: TextOverflow.ellipsis),
                       ),
-                    );
-                  }
-                  final message = _messages[index];
-                  final user = message.role == 'user';
-                  return Align(
-                    alignment: user
-                        ? Alignment.centerRight
-                        : Alignment.centerLeft,
-                    child: Container(
-                      constraints: const BoxConstraints(maxWidth: 340),
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: user
-                            ? const Color(0xFF263659)
-                            : const Color(0xFF161B22),
-                        border: Border.all(color: const Color(0xFF30363D)),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: _messageText(message.text),
+                      visualDensity: VisualDensity.compact,
                     ),
                   );
                 },
               ),
-      ),
-      Container(
-        padding: const EdgeInsets.all(12),
-        decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: Color(0xFF30363D))),
-        ),
-        child: Column(
-          children: [
-            Shortcuts(
-              shortcuts: const {
-                SingleActivator(LogicalKeyboardKey.enter, control: true):
-                    RunAgentIntent(),
-                SingleActivator(LogicalKeyboardKey.enter, meta: true):
-                    RunAgentIntent(),
-              },
-              child: Actions(
-                actions: {
-                  RunAgentIntent: CallbackAction<RunAgentIntent>(
-                    onInvoke: (_) {
-                      _runAgent();
-                      return null;
-                    },
-                  ),
-                },
-                child: TextField(
-                  controller: _agentPrompt,
-                  enabled: !_agentBusy,
-                  minLines: 2,
-                  maxLines: 6,
-                  decoration: InputDecoration(
-                    hintText: 'Ask Codex to change this project…',
-                    helperText: _isMobile ? null : 'Ctrl/Cmd+Enter to run',
-                  ),
-                ),
-              ),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Text(
-                  _codexConnected ? 'Workspace write' : 'Codex not connected',
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
-                const Spacer(),
-                FilledButton.icon(
-                  onPressed: _agentBusy
-                      ? (_agentStopping ? null : _stopAgent)
-                      : (_project == null ? null : _runAgent),
-                  icon: Icon(
-                    _agentBusy
-                        ? Icons.stop_circle_outlined
-                        : Icons.arrow_upward,
-                    size: 18,
-                  ),
-                  label: Text(_agentBusy ? 'Stop' : 'Run'),
-                ),
-              ],
+            const SizedBox(width: 6),
+            IconButton(
+              tooltip: 'New parallel work thread',
+              visualDensity: VisualDensity.compact,
+              onPressed: _createWorkThread,
+              icon: const Icon(Icons.add, size: 18),
             ),
           ],
         ),
-      ),
-    ],
-  );
+      );
+
+  Widget _buildAgentConversation() => Column(
+        children: [
+          Expanded(
+            child: _messages.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.auto_awesome_outlined, size: 42),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Ask Codex to work in ${_project?.name}',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'It can inspect the repository, edit files, and run checks inside this project.',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    controller: _messagesScroll,
+                    padding: const EdgeInsets.all(12),
+                    itemCount: _messages.length + (_agentBusy ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (index == _messages.length) {
+                        return Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  SizedBox.square(
+                                    dimension: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                  SizedBox(width: 10),
+                                  Text(
+                                    _agentStopping
+                                        ? 'Stopping Codex…'
+                                        : 'Codex is working…',
+                                  ),
+                                ],
+                              ),
+                              if (_agentActivity.isNotEmpty) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF161B22),
+                                    border: Border.all(
+                                      color: const Color(0xFF30363D),
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: _agentActivity
+                                        .map(
+                                          (activity) => Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: 4,
+                                            ),
+                                            child: Text('• $activity'),
+                                          ),
+                                        )
+                                        .toList(),
+                                  ),
+                                ),
+                              ],
+                              if (_streamedResponse.isNotEmpty) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF161B22),
+                                    border: Border.all(
+                                      color: const Color(0xFF30363D),
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: _messageText(_streamedResponse),
+                                ),
+                              ],
+                            ],
+                          ),
+                        );
+                      }
+                      final message = _messages[index];
+                      final user = message.role == 'user';
+                      return Align(
+                        alignment:
+                            user ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          constraints: const BoxConstraints(maxWidth: 340),
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: user
+                                ? const Color(0xFF263659)
+                                : const Color(0xFF161B22),
+                            border: Border.all(color: const Color(0xFF30363D)),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: _messageText(message.text),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Color(0xFF30363D))),
+            ),
+            child: Column(
+              children: [
+                if (_pastedImages.isNotEmpty) ...[
+                  SizedBox(
+                    height: 76,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _pastedImages.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final image = _pastedImages[index];
+                        return Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Tooltip(
+                              message:
+                                  '${image.name} (${(image.size / 1024).ceil()} KiB)',
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.network(
+                                  image.dataUrl,
+                                  width: 76,
+                                  height: 76,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              right: -6,
+                              top: -6,
+                              child: IconButton.filled(
+                                tooltip: 'Remove ${image.name}',
+                                visualDensity: VisualDensity.compact,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 24,
+                                  height: 24,
+                                ),
+                                padding: EdgeInsets.zero,
+                                iconSize: 14,
+                                onPressed: _agentBusy
+                                    ? null
+                                    : () => setState(() {
+                                          _pastedImages.removeAt(index);
+                                        }),
+                                icon: const Icon(Icons.close),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                Shortcuts(
+                  shortcuts: const {
+                    SingleActivator(LogicalKeyboardKey.enter, control: true):
+                        RunAgentIntent(),
+                    SingleActivator(LogicalKeyboardKey.enter, meta: true):
+                        RunAgentIntent(),
+                  },
+                  child: Actions(
+                    actions: {
+                      RunAgentIntent: CallbackAction<RunAgentIntent>(
+                        onInvoke: (_) {
+                          _runAgent();
+                          return null;
+                        },
+                      ),
+                    },
+                    child: TextField(
+                      controller: _agentPrompt,
+                      focusNode: _agentPromptFocus,
+                      enabled: !_agentBusy,
+                      minLines: 2,
+                      maxLines: 6,
+                      decoration: InputDecoration(
+                        hintText:
+                            'Ask Codex to change this project… Paste images to attach.',
+                        helperText: _isMobile ? null : 'Ctrl/Cmd+Enter to run',
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Text(
+                      _codexConnected
+                          ? 'Workspace write'
+                          : 'Codex not connected',
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: _agentBusy
+                          ? (_agentStopping ? null : _stopAgent)
+                          : (_project == null ? null : _runAgent),
+                      icon: Icon(
+                        _agentBusy
+                            ? Icons.stop_circle_outlined
+                            : Icons.arrow_upward,
+                        size: 18,
+                      ),
+                      label: Text(_agentBusy ? 'Stop' : 'Run'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
 
   Widget _buildSourceControl(GitStatus status) {
     final canPublish =
         status.hasRemote && status.branch.isNotEmpty && !status.hasUpstream;
-    final canCreatePullRequest =
-        status.hasRemote &&
+    final canCreatePullRequest = status.hasRemote &&
         status.hasUpstream &&
         status.prAvailable &&
         status.ahead == 0;
     final state = status.changedCount > 0
         ? _GitPrimaryState.commit
         : _gitSyncRequired || status.behind > 0
-        ? _GitPrimaryState.sync
-        : canPublish
-        ? _GitPrimaryState.publish
-        : status.ahead > 0
-        ? _GitPrimaryState.push
-        : canCreatePullRequest
-        ? _GitPrimaryState.createPullRequest
-        : _GitPrimaryState.clean;
+            ? _GitPrimaryState.sync
+            : canPublish
+                ? _GitPrimaryState.publish
+                : status.ahead > 0
+                    ? _GitPrimaryState.push
+                    : canCreatePullRequest
+                        ? _GitPrimaryState.createPullRequest
+                        : _GitPrimaryState.clean;
     final VoidCallback? primary = switch (state) {
       _GitPrimaryState.commit => _commitChanges,
       _GitPrimaryState.sync => _syncChanges,
@@ -3970,15 +4084,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 child: FilledButton.icon(
                   onPressed: _gitBusy ? null : primary,
                   icon: Icon(
-                    switch (state) {
-                      _GitPrimaryState.commit => Icons.commit,
-                      _GitPrimaryState.sync => Icons.sync,
-                      _GitPrimaryState.createPullRequest =>
-                        Icons.call_merge_outlined,
-                      _ => Icons.cloud_upload_outlined,
-                    },
-                    size: 17,
-                  ),
+                      switch (state) {
+                        _GitPrimaryState.commit => Icons.commit,
+                        _GitPrimaryState.sync => Icons.sync,
+                        _GitPrimaryState.createPullRequest =>
+                          Icons.call_merge_outlined,
+                        _ => Icons.cloud_upload_outlined,
+                      },
+                      size: 17),
                   label: Text(primaryLabel),
                 ),
               ),
