@@ -1710,40 +1710,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     );
   }
 
-  Future<void> _enableAutoMerge() async {
-    final method = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Enable auto-merge'),
-        content: const Text(
-          'GitHub will merge this branch only after all required checks and branch protections pass. Choose the merge method.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'merge'),
-            child: const Text('Create merge commit'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'rebase'),
-            child: const Text('Rebase'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, 'squash'),
-            child: const Text('Squash'),
-          ),
-        ],
-      ),
-    );
-    if (method == null) return;
-    await _runGitAction('/git/pull-request/auto-merge', {
-      'method': method,
-    }, 'Auto-merge enabled');
-  }
-
   Future<void> _runGitAction(
     String endpoint,
     Map<String, dynamic>? body,
@@ -3810,15 +3776,21 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Widget _buildSourceControl() {
     final status = _gitStatus!;
-    final primary = status.changedCount > 0
+    final canCreatePullRequest =
+        status.hasRemote && status.prAvailable && status.ahead == 0;
+    final VoidCallback? primary = status.changedCount > 0
         ? _commitChanges
         : status.ahead > 0
         ? _pushChanges
+        : canCreatePullRequest
+        ? _createPullRequest
         : null;
     final primaryLabel = status.changedCount > 0
         ? 'Commit ${status.changedCount} ${status.changedCount == 1 ? 'change' : 'changes'}'
         : status.ahead > 0
         ? 'Push ${status.ahead} ${status.ahead == 1 ? 'commit' : 'commits'}'
+        : canCreatePullRequest
+        ? 'Create pull request'
         : 'Up to date';
     return Column(
       children: [
@@ -3897,35 +3869,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   icon: Icon(
                     status.changedCount > 0
                         ? Icons.commit
+                        : status.ahead > 0
+                        ? Icons.cloud_upload_outlined
+                        : canCreatePullRequest
+                        ? Icons.call_merge_outlined
                         : Icons.cloud_upload_outlined,
                     size: 17,
                   ),
                   label: Text(primaryLabel),
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Create a pull request after pushing this branch',
-                onPressed:
-                    _gitBusy ||
-                        !status.hasRemote ||
-                        !status.prAvailable ||
-                        status.changedCount > 0 ||
-                        status.ahead == 0
-                    ? null
-                    : _createPullRequest,
-                icon: const Icon(Icons.call_merge_outlined, size: 19),
-              ),
-              IconButton(
-                tooltip: 'Enable auto-merge for this branch\'s pull request',
-                onPressed:
-                    _gitBusy ||
-                        !status.hasRemote ||
-                        !status.prAvailable ||
-                        status.changedCount > 0
-                    ? null
-                    : _enableAutoMerge,
-                icon: const Icon(Icons.merge_type_outlined, size: 19),
               ),
             ],
           ),
