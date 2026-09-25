@@ -1065,6 +1065,9 @@ def serve():
                 continue
             files.append({"path": line[3:], "index": line[0], "worktree": line[1]})
         remote = git_result(project, "remote", "get-url", "origin")
+        upstream = git_result(
+            project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"
+        )
         return {
             "isRepo": True,
             "branch": branch,
@@ -1073,6 +1076,7 @@ def serve():
             "ahead": ahead,
             "behind": behind,
             "hasRemote": remote.returncode == 0,
+            "hasUpstream": upstream.returncode == 0,
             "prAvailable": shutil.which("gh") is not None,
         }
 
@@ -1474,7 +1478,13 @@ def serve():
         if not status["isRepo"] or not status["hasRemote"]:
             raise HTTPException(400, "this branch has no origin remote")
         async with mutation_lock:
-            result = await asyncio.to_thread(git_result, project, "push")
+            push_args = ("push",) if status["hasUpstream"] else (
+                "push",
+                "--set-upstream",
+                "origin",
+                "HEAD",
+            )
+            result = await asyncio.to_thread(git_result, project, *push_args)
             if result.returncode:
                 raise HTTPException(400, git_error(result, "could not push branch"))
             await commit()
@@ -1483,6 +1493,11 @@ def serve():
     @api.post("/api/projects/{name}/git/pull-request")
     async def create_pull_request(name: str, request: Request):
         project = active_workspace(name)
+        status = git_status(project)
+        if not status["hasRemote"] or not status["hasUpstream"]:
+            raise HTTPException(400, "push this branch before creating a pull request")
+        if status["ahead"]:
+            raise HTTPException(400, "push the latest commits before creating a pull request")
         body = await request.json()
         title = str(body.get("title", "")).strip()
         base = str(body.get("base", "")).strip()
@@ -1528,6 +1543,8 @@ def serve():
         status = git_status(project)
         if not status["isRepo"] or not status["hasRemote"]:
             raise HTTPException(400, "this branch has no origin remote")
+        if not status["hasUpstream"] or status["ahead"]:
+            raise HTTPException(400, "push this branch before enabling auto-merge")
         if not shutil.which("gh"):
             raise HTTPException(503, "GitHub CLI is unavailable in this deployment")
         async with mutation_lock:
