@@ -60,11 +60,11 @@ Restore individual files or folders with `modal volume put`. Treat that backup
 as sensitive because it includes repository contents and Codex authentication
 state.
 
-Projects created before handle isolation do not have an `owner.json` marker and
-are deliberately hidden rather than assigned to the first account that happens
-to sign in. To assign one, place an owner file containing
-`{"handle":"you.bsky.social"}` at
-`/workspace/.code-editor/<project>/owner.json`, then commit the Volume.
+On the first sign-in after upgrading from a version without handle isolation,
+all projects without an owner marker are assigned to that handle. The migration
+handle is persisted in `/workspace/.code-editor/legacy-owner.json`, so a later
+handle cannot claim any remaining legacy projects. New projects are assigned to
+their creator immediately.
 
 ## Deploy
 

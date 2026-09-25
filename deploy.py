@@ -693,6 +693,7 @@ def serve():
                 "The original sign-in request is no longer available. Please start again.",
                 401,
             )
+        await claim_legacy_projects(handle)
         request.session["user"] = {
             "did": did,
             "handle": handle,
@@ -744,6 +745,39 @@ def serve():
             json.dumps({"handle": handle}, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+    async def claim_legacy_projects(handle: str) -> None:
+        """Assign pre-isolation projects once, without letting later users claim them."""
+        handle = handle.strip().lower()
+        migration_path = session_root / "legacy-owner.json"
+        async with mutation_lock:
+            changed = False
+            if migration_path.exists():
+                try:
+                    migration = json.loads(migration_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    return
+                if not isinstance(migration, dict) or migration.get("handle") != handle:
+                    return
+            else:
+                migration_path.write_text(
+                    json.dumps({"handle": handle}, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                changed = True
+
+            for path in root.iterdir():
+                if (
+                    path.is_dir()
+                    and project_name.fullmatch(path.name)
+                    and path.name not in reserved
+                    and not (path / ".git").is_file()
+                    and not project_owner_path(path.name).exists()
+                ):
+                    write_project_owner(path.name, handle)
+                    changed = True
+            if changed:
+                await commit()
 
     def ci_repair_ledger_path() -> Path:
         return root / ".system" / "ci-repairs.json"
@@ -1126,6 +1160,9 @@ def serve():
     async def list_projects(request: Request):
         root.mkdir(parents=True, exist_ok=True)
         handle = user_handle(request.session["user"])
+        # Existing signed-in browser sessions may survive the deployment and
+        # therefore not pass through the OAuth callback again.
+        await claim_legacy_projects(handle)
         values = []
         for path in sorted(root.iterdir(), key=lambda item: item.name.lower()):
             if (
