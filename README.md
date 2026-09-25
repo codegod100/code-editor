@@ -160,6 +160,11 @@ repository. Do not use `GITHUB_TOKEN`: GitHub intentionally suppresses
 downstream workflow runs for pushes it creates, so a merge made with that token
 will not start the deployment workflow.
 
+When auto-merge is selected in the editor, the editor also watches the exact
+pull request until it merges or is closed. If GitHub temporarily rejects the
+auto-merge request while a new pull request is `UNSTABLE`, the editor retries
+instead of reporting the successfully-created pull request as a failure.
+
 The setup script obtains the currently authenticated GitHub CLI token and passes
 it to GitHub CLI on standard input; it does not use an environment variable,
 command-line argument, or file:
