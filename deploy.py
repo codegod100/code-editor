@@ -1276,6 +1276,27 @@ def serve():
         if initial_commit.returncode:
             raise HTTPException(500, git_error(initial_commit, "could not create the initial commit"))
 
+    def branch_pull_request(project: Path) -> dict | None:
+        # Query the checked-out branch so refreshes and project switches retain
+        # the PR lifecycle, including PRs created outside the editor.
+        try:
+            result = github_cli_result(
+                project, "pr", "view", "--json", "url,state,autoMergeRequest", timeout=10,
+            )
+            if result.returncode:
+                return None
+            data = json.loads(result.stdout)
+            if not isinstance(data, dict) or not data.get("url"):
+                return None
+            return {
+                "url": data["url"],
+                "state": data.get("state", "OPEN"),
+                "autoMergeEnabled": data.get("autoMergeRequest") is not None,
+            }
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            # Git operations must still work when GitHub is unavailable.
+            return None
+
     def git_status(project: Path) -> dict:
         ensure_git_repository(project)
         try:
@@ -1310,6 +1331,8 @@ def serve():
         upstream = git_result(
             project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"
         )
+        pr_available = shutil.which("gh") is not None
+        pull_request = branch_pull_request(project) if remote.returncode == 0 and pr_available else None
         return {
             "isRepo": True,
             "branch": branch,
@@ -1319,7 +1342,8 @@ def serve():
             "behind": behind,
             "hasRemote": remote.returncode == 0,
             "hasUpstream": upstream.returncode == 0,
-            "prAvailable": shutil.which("gh") is not None,
+            "prAvailable": pr_available,
+            "pullRequest": pull_request,
         }
 
     def project_summaries(handle: str) -> list[dict]:
@@ -2005,29 +2029,47 @@ def serve():
             if result.returncode:
                 raise HTTPException(400, git_error(result, "could not create pull request"))
             pull_request_url = result.stdout.strip()
+            warning = None
+            auto_merge_enabled = False
             if method_flag is not None:
-                auto_merge = await asyncio.to_thread(
-                    github_cli_result,
-                    project,
-                    "pr",
-                    "merge",
-                    pull_request_url,
-                    "--auto",
-                    method_flag,
-                )
-                if auto_merge.returncode:
-                    print(
-                        f"Auto-merge is not ready for {pull_request_url}; watching: "
-                        + git_error(auto_merge, "unknown error"),
-                        file=sys.stderr,
+                try:
+                    auto_merge = await asyncio.to_thread(
+                        github_cli_result,
+                        project,
+                        "pr",
+                        "merge",
+                        pull_request_url,
+                        "--auto",
+                        method_flag,
                     )
+                    auto_merge_enabled = auto_merge.returncode == 0
+                    if not auto_merge_enabled:
+                        warning = (
+                            "Pull request was created, but auto-merge could not be enabled yet; "
+                            "monitoring will retry: " + git_error(auto_merge, "unknown error")
+                        )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    warning = (
+                        "Pull request was created, but auto-merge could not be confirmed; "
+                        f"monitoring will retry: {exc}"
+                    )
+                if warning:
+                    print(warning, file=sys.stderr)
                 watch_pull_request_merge(project, pull_request_url, method_flag)
             await commit()
+        status = await asyncio.to_thread(git_status, project)
+        # Creation succeeded even if the follow-up lookup or auto-merge failed.
+        if status["pullRequest"] is None:
+            status["pullRequest"] = {
+                "url": pull_request_url, "state": "OPEN",
+                "autoMergeEnabled": auto_merge_enabled,
+            }
         return {
             "url": pull_request_url,
-            "autoMergeEnabled": method_flag is not None and auto_merge.returncode == 0,
+            "autoMergeEnabled": auto_merge_enabled,
             "autoMergeMonitoring": method_flag is not None,
-            "status": await asyncio.to_thread(git_status, project),
+            "status": status,
+            "warning": warning,
         }
 
     @api.post("/api/projects/{name}/git/pull-request/auto-merge")

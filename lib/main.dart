@@ -7,6 +7,8 @@ import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'git_status.dart';
+
 const _deployedVersion = String.fromEnvironment('APP_RELEASE');
 
 void main() => runApp(const AgentWorkspaceApp());
@@ -171,67 +173,15 @@ class FreeqBot {
   final String version;
 }
 
-class GitChange {
-  const GitChange({
-    required this.path,
-    required this.index,
-    required this.worktree,
-  });
-
-  factory GitChange.fromJson(Map<String, dynamic> json) => GitChange(
-        path: json['path'] as String? ?? '',
-        index: json['index'] as String? ?? ' ',
-        worktree: json['worktree'] as String? ?? ' ',
-      );
-
-  final String path;
-  final String index;
-  final String worktree;
-
-  String get label => index == '?' || worktree == '?'
-      ? 'New'
-      : index != ' '
-          ? 'Staged'
-          : 'Modified';
+enum _GitPrimaryState {
+  commit,
+  sync,
+  publish,
+  push,
+  createPullRequest,
+  viewPullRequest,
+  clean,
 }
-
-class GitStatus {
-  const GitStatus({
-    required this.isRepo,
-    required this.files,
-    this.branch = '',
-    this.ahead = 0,
-    this.behind = 0,
-    this.hasRemote = false,
-    this.hasUpstream = false,
-    this.prAvailable = false,
-  });
-
-  factory GitStatus.fromJson(Map<String, dynamic> json) => GitStatus(
-        isRepo: json['isRepo'] as bool? ?? false,
-        branch: json['branch'] as String? ?? '',
-        files: (json['files'] as List<dynamic>? ?? const [])
-            .map((item) => GitChange.fromJson(item as Map<String, dynamic>))
-            .toList(),
-        ahead: json['ahead'] as int? ?? 0,
-        behind: json['behind'] as int? ?? 0,
-        hasRemote: json['hasRemote'] as bool? ?? false,
-        hasUpstream: json['hasUpstream'] as bool? ?? false,
-        prAvailable: json['prAvailable'] as bool? ?? false,
-      );
-
-  final bool isRepo;
-  final String branch;
-  final List<GitChange> files;
-  final int ahead;
-  final int behind;
-  final bool hasRemote;
-  final bool hasUpstream;
-  final bool prAvailable;
-  int get changedCount => files.length;
-}
-
-enum _GitPrimaryState { commit, sync, publish, push, createPullRequest, clean }
 
 class _ApiException implements Exception {
   const _ApiException(this.message, {this.code, this.data = const {}});
@@ -1541,10 +1491,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _refreshGitStatus() async {
     if (_project == null) return;
+    final project = _project;
     try {
       final response = await _request('GET', _projectUrl('/git/status'));
       final status = GitStatus.fromJson(response);
-      if (mounted) {
+      if (mounted && _project == project) {
         setState(() {
           _gitStatus = status;
           if (status.behind == 0) {
@@ -1554,7 +1505,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _gitStatus = null);
+      if (mounted && _project == project) setState(() => _gitStatus = null);
     }
   }
 
@@ -1866,6 +1817,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Future<void> _createPullRequest() async {
+    if (_gitBusy || _gitStatus?.prState != PullRequestState.none) return;
     Map<String, dynamic> draft;
     try {
       draft = await _request('GET', _projectUrl('/git/draft/pull-request'));
@@ -1977,7 +1929,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (_project == null || _gitBusy) return;
     setState(() => _gitBusy = true);
     try {
+      final project = _project;
       final response = await _request('POST', _projectUrl(endpoint), body);
+      if (!mounted || _project != project) return;
       if (response['state'] == 'sync_required') {
         final status = response['status'];
         if (mounted) {
@@ -1996,8 +1950,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       }
       _gitSyncRequired = false;
       _gitRebaseConflict = false;
-      await _refreshGitStatus();
-      if (response['url'] is String && mounted) {
+      if (response['status'] is Map<String, dynamic>) {
+        setState(() => _gitStatus = GitStatus.fromJson(response['status']));
+      } else {
+        await _refreshGitStatus();
+      }
+      if (response['warning'] is String && mounted) {
+        _showError(response['warning']);
+      } else if (response['url'] is String && mounted) {
         _showError('$success: ${response['url']}');
       }
     } on _ApiException catch (error) {
@@ -4260,6 +4220,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     final canCreatePullRequest = status.hasRemote &&
         status.hasUpstream &&
         status.prAvailable &&
+        status.prState == PullRequestState.none &&
         status.ahead == 0;
     final state = status.changedCount > 0
         ? _GitPrimaryState.commit
@@ -4269,14 +4230,19 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 ? _GitPrimaryState.publish
                 : status.ahead > 0
                     ? _GitPrimaryState.push
-                    : canCreatePullRequest
-                        ? _GitPrimaryState.createPullRequest
-                        : _GitPrimaryState.clean;
+                    : status.prState != PullRequestState.none
+                        ? _GitPrimaryState.viewPullRequest
+                        : canCreatePullRequest
+                            ? _GitPrimaryState.createPullRequest
+                            : _GitPrimaryState.clean;
     final VoidCallback? primary = switch (state) {
       _GitPrimaryState.commit => _commitChanges,
       _GitPrimaryState.sync => _syncChanges,
       _GitPrimaryState.publish || _GitPrimaryState.push => _pushChanges,
       _GitPrimaryState.createPullRequest => _createPullRequest,
+      _GitPrimaryState.viewPullRequest => status.prUrl.isEmpty
+          ? null
+          : () => html.window.open(status.prUrl, '_blank'),
       _GitPrimaryState.clean => null,
     };
     final primaryLabel = switch (state) {
@@ -4287,6 +4253,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _GitPrimaryState.push =>
         'Push ${status.ahead} ${status.ahead == 1 ? 'commit' : 'commits'}',
       _GitPrimaryState.createPullRequest => 'Create pull request',
+      _GitPrimaryState.viewPullRequest => status.prLabel,
       _GitPrimaryState.clean =>
         !status.hasRemote ? 'No origin remote' : 'Up to date',
     };
@@ -4398,6 +4365,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                               switch (state) {
                                 _GitPrimaryState.commit => Icons.commit,
                                 _GitPrimaryState.sync => Icons.sync,
+                                _GitPrimaryState.viewPullRequest =>
+                                  Icons.open_in_new,
                                 _GitPrimaryState.createPullRequest =>
                                   Icons.call_merge_outlined,
                                 _ => Icons.cloud_upload_outlined,
