@@ -3558,6 +3558,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 message: thread.title,
                 child: InputChip(
                   selected: selected,
+                  showCheckmark: false,
                   onSelected: (_) => _selectWorkThread(thread.id),
                   onDeleted: running ? null : () => _archiveWorkThread(thread),
                   deleteIcon: const Icon(Icons.archive_outlined, size: 16),
