@@ -4098,15 +4098,22 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               Expanded(
                 child: FilledButton.icon(
                   onPressed: _gitBusy ? null : primary,
-                  icon: Icon(
-                      switch (state) {
-                        _GitPrimaryState.commit => Icons.commit,
-                        _GitPrimaryState.sync => Icons.sync,
-                        _GitPrimaryState.createPullRequest =>
-                          Icons.call_merge_outlined,
-                        _ => Icons.cloud_upload_outlined,
-                      },
-                      size: 17),
+                  icon: _gitBusy
+                      ? const SizedBox(
+                          width: 17,
+                          height: 17,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          switch (state) {
+                            _GitPrimaryState.commit => Icons.commit,
+                            _GitPrimaryState.sync => Icons.sync,
+                            _GitPrimaryState.createPullRequest =>
+                              Icons.call_merge_outlined,
+                            _ => Icons.cloud_upload_outlined,
+                          },
+                          size: 17,
+                        ),
                   label: Text(primaryLabel),
                 ),
               ),
