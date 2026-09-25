@@ -190,7 +190,7 @@ def serve():
 
     from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
-    from urllib.parse import quote, urlparse
+    from urllib.parse import quote, unquote, urlparse
     from urllib.request import urlopen
     from fastapi.staticfiles import StaticFiles
     from openai_codex import ApprovalMode, AsyncCodex, Sandbox
@@ -227,7 +227,16 @@ def serve():
 
     @api.middleware("http")
     async def require_atproto_identity(request: Request, call_next):
-        if request.url.path in public_paths or request.session.get("user"):
+        user = request.session.get("user")
+        if request.url.path in public_paths:
+            return await call_next(request)
+        if user:
+            # Project names live in a shared Volume namespace, so authentication
+            # alone is insufficient. Authorize every project-specific HTTP
+            # route here so a newly added endpoint cannot omit this check.
+            match = re.match(r"^/api/projects/([^/]+)(?:/|$)", request.url.path)
+            if match and not project_owned_by(unquote(match.group(1)), user_handle(user)):
+                return JSONResponse({"detail": "project not found"}, status_code=404)
             return await call_next(request)
         if request.url.path.startswith("/api/"):
             return JSONResponse(
@@ -707,6 +716,35 @@ def serve():
     async def commit() -> None:
         await asyncio.to_thread(projects.commit)
 
+    def user_handle(user: dict) -> str:
+        handle = user.get("handle") if isinstance(user, dict) else None
+        if not isinstance(handle, str) or not handle.strip():
+            raise HTTPException(401, "AT Protocol authentication required")
+        return handle.strip().lower()
+
+    def project_owner_path(name: str) -> Path:
+        return session_root / name / "owner.json"
+
+    def project_owned_by(name: str, handle: str) -> bool:
+        if not project_name.fullmatch(name) or name in reserved:
+            return False
+        path = project_owner_path(name)
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # Legacy projects have no trustworthy owner association. Keep them
+            # private until an administrator explicitly assigns an owner.
+            return False
+        return isinstance(value, dict) and value.get("handle") == handle
+
+    def write_project_owner(name: str, handle: str) -> None:
+        path = project_owner_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"handle": handle}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
     def ci_repair_ledger_path() -> Path:
         return root / ".system" / "ci-repairs.json"
 
@@ -1085,8 +1123,9 @@ def serve():
         }
 
     @api.get("/api/projects")
-    async def list_projects():
+    async def list_projects(request: Request):
         root.mkdir(parents=True, exist_ok=True)
+        handle = user_handle(request.session["user"])
         values = []
         for path in sorted(root.iterdir(), key=lambda item: item.name.lower()):
             if (
@@ -1094,6 +1133,7 @@ def serve():
                 or not project_name.fullmatch(path.name)
                 or path.name in reserved
                 or (path / ".git").is_file()
+                or not project_owned_by(path.name, handle)
             ):
                 continue
             is_repo = (path / ".git").exists()
@@ -1152,6 +1192,7 @@ def serve():
             else:
                 destination.mkdir()
 
+            write_project_owner(name, user_handle(request.session["user"]))
             write_session(destination, {"threadId": None, "messages": []})
             await commit()
         return {"name": name, "isRepo": bool(repo_url)}
@@ -2147,8 +2188,17 @@ def serve():
     @api.websocket("/api/projects/{name}/terminal")
     async def project_terminal(name: str, websocket: WebSocket):
         """Bridge a reconnectable browser terminal to a project shell."""
-        if not websocket.session.get("user"):
+        user = websocket.session.get("user")
+        if not user:
             await websocket.close(code=4401)
+            return
+        try:
+            handle = user_handle(user)
+        except HTTPException:
+            await websocket.close(code=4401)
+            return
+        if not project_owned_by(name, handle):
+            await websocket.close(code=4404)
             return
         parent_project = project_dir(name)
         project_session = read_session(parent_project)

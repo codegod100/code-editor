@@ -24,6 +24,9 @@ All mutable state is on the Modal v2 Volume
 `cloud-code-editor-projects`, mounted at the absolute path `/workspace`:
 
 - `/workspace/<project>` contains the folder or Git checkout.
+- `/workspace/.code-editor/<project>/owner.json` binds the project to the
+  normalized AT Protocol handle that created it. Project listing, HTTP routes,
+  and terminal WebSockets all enforce this ownership boundary.
 - `/workspace/.code-editor/<project>/session.json` contains each project's named
   Codex work threads, active-thread selection, and archived conversations without
   placing editor-owned state in the project checkout.
@@ -56,6 +59,12 @@ modal volume get cloud-code-editor-projects / ./cloud-code-editor-projects-backu
 Restore individual files or folders with `modal volume put`. Treat that backup
 as sensitive because it includes repository contents and Codex authentication
 state.
+
+Projects created before handle isolation do not have an `owner.json` marker and
+are deliberately hidden rather than assigned to the first account that happens
+to sign in. To assign one, place an owner file containing
+`{"handle":"you.bsky.social"}` at
+`/workspace/.code-editor/<project>/owner.json`, then commit the Volume.
 
 ## Deploy
 
