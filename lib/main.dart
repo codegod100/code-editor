@@ -1828,6 +1828,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Future<void> _createWorktree() async {
     final project = _project;
     if (project == null || !project.isRepo || _gitBusy) return;
+    if (_dirty && !await _confirmDiscard()) return;
     final workspace = TextEditingController(text: '${project.name}-worktree');
     final branch = TextEditingController();
     final startPoint = TextEditingController(text: 'main');
@@ -1894,12 +1895,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (values == null || values.any((value) => value.isEmpty)) return;
     setState(() => _gitBusy = true);
     try {
-      final response = await _request('POST', _projectUrl('/worktrees'), {
+      await _request('POST', _projectUrl('/worktrees'), {
         'workspaceName': values[0],
         'branch': values[1],
         'startPoint': values[2],
       });
-      await _refreshProjects(select: response['name'] as String);
+      _closeActiveCheckoutTerminals();
+      _clearActiveCheckoutView();
+      await _loadSession();
+      await Future.wait([_refreshTree(), _refreshGitStatus()]);
     } catch (error) {
       _showError(error);
     } finally {
@@ -2038,10 +2042,37 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         .toList();
   }
 
+  void _clearActiveCheckoutView() {
+    if (!mounted) return;
+    setState(() {
+      _path = null;
+      _savedText = '';
+      _code.clear();
+      _files = const [];
+      _expandedDirectories.clear();
+    });
+  }
+
+  void _closeActiveCheckoutTerminals() {
+    final projectName = _project?.name;
+    if (projectName == null) return;
+    for (final terminal in _terminals) {
+      unawaited(_closeTerminal(projectName, terminal.id));
+    }
+    if (!mounted) return;
+    setState(() {
+      _terminals.clear();
+      _activeTerminalId = null;
+      _terminalVisible = false;
+    });
+  }
+
   Future<void> _selectWorkThread(String threadId) async {
     if (_activeWorkThreadId == threadId || _project == null) return;
+    if (_dirty && !await _confirmDiscard()) return;
     final thread = _workThreads.where((item) => item.id == threadId).firstOrNull;
     if (thread == null) return;
+    _closeActiveCheckoutTerminals();
     setState(() {
       _activeWorkThreadId = threadId;
       _messages = thread.messages;
@@ -2050,9 +2081,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _agentActivity = _workThreadActivity[threadId] ?? const [];
       _streamedResponse = _workThreadStreams[threadId] ?? '';
     });
+    _clearActiveCheckoutView();
     _scrollMessages();
     try {
       await _request('PATCH', _projectUrl('/session'), {'threadId': threadId});
+      await Future.wait([_refreshTree(), _refreshGitStatus()]);
     } catch (error) {
       _showError(error);
     }
@@ -2240,6 +2273,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _createWorkThread() async {
     if (_project == null) return;
+    if (_dirty && !await _confirmDiscard()) return;
     final name = TextEditingController();
     final result = await showDialog<String>(
       context: context,
@@ -2247,14 +2281,23 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         title: const Text('Create another work thread'),
         content: SizedBox(
           width: _dialogWidth(context, 420),
-          child: TextField(
-            controller: name,
-            autofocus: true,
-            maxLength: 100,
-            decoration: const InputDecoration(
-              labelText: 'Work thread name',
-              hintText: 'Add search to the projects page',
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'This creates an isolated Git worktree inside the current project.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: name,
+                autofocus: true,
+                maxLength: 100,
+                decoration: const InputDecoration(
+                  labelText: 'Work thread name',
+                  hintText: 'Add search to the projects page',
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -2280,7 +2323,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       await _request('POST', _projectUrl('/session/threads'), {
         'name': result,
       });
+      _closeActiveCheckoutTerminals();
+      _clearActiveCheckoutView();
       await _loadSession();
+      await Future.wait([_refreshTree(), _refreshGitStatus()]);
     } catch (error) {
       _showError(error);
     }
@@ -2319,7 +2365,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       );
       _workThreadActivity.remove(thread.id);
       _workThreadStreams.remove(thread.id);
+      if (_activeWorkThreadId == thread.id) {
+        _closeActiveCheckoutTerminals();
+        _clearActiveCheckoutView();
+      }
       await _loadSession();
+      await Future.wait([_refreshTree(), _refreshGitStatus()]);
     } catch (error) {
       _showError(error);
     } finally {
@@ -2389,7 +2440,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       await _request('POST', _projectUrl('/session/reactivate'), {
         'archivedAt': thread.archivedAt,
       });
+      _closeActiveCheckoutTerminals();
+      _clearActiveCheckoutView();
       await _loadSession();
+      await Future.wait([_refreshTree(), _refreshGitStatus()]);
     } catch (error) {
       _showError(error);
     }
