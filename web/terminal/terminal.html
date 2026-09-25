@@ -8,10 +8,12 @@
       html, body, #terminal { height: 100%; margin: 0; overflow: hidden; background: #0d1117; }
       #terminal { box-sizing: border-box; padding: 8px; }
       #status { position: fixed; right: 10px; top: 8px; color: #8b949e; font: 11px ui-monospace, monospace; }
+      #keyboard { display: none; position: fixed; right: 10px; bottom: 10px; z-index: 2; padding: 8px 12px; color: #c9d1d9; background: #30363d; border: 1px solid #6e7681; border-radius: 6px; }
+      @media (pointer: coarse) { #keyboard { display: block; } }
     </style>
   </head>
   <body>
-    <div id="terminal"></div><div id="status">Connecting…</div>
+    <div id="terminal"></div><div id="status">Connecting…</div><button id="keyboard" type="button" aria-label="Open terminal keyboard">Keyboard</button>
     <script type="module" src="terminal.js"></script>
   </body>
 </html>

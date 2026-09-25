@@ -55,6 +55,42 @@ terminal = new Terminal({
   theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#7c9cff' },
 });
 terminal.open(mount);
+// Ghostty's web input handler consumes keydown, which soft keyboards do not
+// consistently emit. Read their committed textarea edits instead.
+if (matchMedia('(pointer: coarse)').matches) {
+  const input = terminal.textarea;
+  const keyboard = document.getElementById('keyboard');
+  keyboard.addEventListener('click', () => input.focus());
+  let composing = false;
+  input.addEventListener('keydown', (event) => {
+    // Let the browser commit soft-keyboard text via input, including IME text.
+    if (event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      event.stopPropagation();
+    }
+  }, true);
+  input.addEventListener('beforeinput', (event) => {
+    if (event.inputType === 'deleteContentBackward' && !input.value) {
+      terminal.input('\x7f', true);
+    }
+  });
+  input.addEventListener('compositionstart', (event) => {
+    event.stopPropagation();
+    composing = true;
+  }, true);
+  input.addEventListener('compositionend', (event) => {
+    event.stopPropagation();
+    composing = false;
+    if (input.value) terminal.input(input.value, true);
+    input.value = '';
+  }, true);
+  input.addEventListener('input', () => {
+    if (composing) return;
+    const value = input.value;
+    if (value) terminal.input(value.replaceAll('\n', '\r'), true);
+    // Keep an empty input so replacement/autocorrect does not alter shell text.
+    input.value = '';
+  });
+}
 fitAddon = new FitAddon();
 terminal.loadAddon(fitAddon);
 
