@@ -33,6 +33,10 @@ function durableStore(path) {
 }
 
 const client = new NodeOAuthClient({
+  // The Node resolver's direct .well-known/DNS lookups can fail in serverless
+  // networks even when a bsky.social handle is publicly resolvable. Use the
+  // Bluesky entryway's com.atproto.identity.resolveHandle endpoint instead.
+  handleResolver: 'https://bsky.social/',
   clientMetadata: {
     client_id: `${appUrl}/oauth-client-metadata.json`,
     client_name: 'Codex Workspace',
