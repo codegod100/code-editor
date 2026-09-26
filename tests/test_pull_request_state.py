@@ -22,6 +22,12 @@ def load_function(name, namespace):
     return namespace[name]
 
 
+class HTTPError(Exception):
+    def __init__(self, status_code, detail):
+        super().__init__(detail)
+        self.status_code, self.detail = status_code, detail
+
+
 class PullRequestStateTests(unittest.TestCase):
     def lookup(self, result=None, error=None):
         runner = Mock(return_value=result, side_effect=error)
@@ -88,6 +94,65 @@ class PullRequestStateTests(unittest.TestCase):
             self.assertIn('auto-merge could not be enabled', response['warning'])
         asyncio.run(run())
 
+
+    def commit_pull_request(self, push, pull_request=None, gh=None):
+        calls = []
+
+        def git(project, *args, **kwargs):
+            calls.append(args)
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+        namespace = {
+            'Request': object, 'asyncio': asyncio, 'sys': sys, 'subprocess': subprocess,
+            'HTTPException': HTTPError,
+            'resolve_active_workspace': AsyncMock(return_value=Path('/project')),
+            'watch_pull_request_merge': Mock(),
+            'shutil': SimpleNamespace(which=lambda name: '/bin/gh'),
+            'mutation_lock': asyncio.Lock(), 'commit': AsyncMock(),
+            'git_result': git, 'git_push_result': Mock(side_effect=push),
+            'github_cli_result': gh or Mock(return_value=SimpleNamespace(
+                returncode=0, stdout='https://github.com/example/repo/pull/2')),
+            'git_draft': lambda project, target: {
+                'title': 'Fix', 'base': 'main', 'description': '## Summary\n\n- Fix'},
+            'git_error': lambda result, fallback: result.stderr or fallback,
+            'git_status': lambda project: {
+                'isRepo': True, 'hasRemote': True, 'hasUpstream': False, 'branch': 'feature',
+                'changedCount': 1, 'ahead': 0, 'pullRequest': pull_request,
+            },
+        }
+        run = load_function('commit_and_create_pull_request', namespace)
+        request = SimpleNamespace(json=AsyncMock(return_value={'message': 'Fix'}))
+        return namespace, calls, (lambda: asyncio.run(run('project', request)))
+
+    def test_commit_push_and_create_pull_request(self):
+        namespace, calls, run = self.commit_pull_request(
+            [SimpleNamespace(returncode=0, stdout='', stderr='')])
+        response = run()
+        self.assertEqual(response['url'], 'https://github.com/example/repo/pull/2')
+        self.assertIn('commit', calls[1])
+        namespace['git_push_result'].assert_called_once_with(
+            Path('/project'), 'push', '--set-upstream', 'origin', 'HEAD')
+        args = namespace['github_cli_result'].call_args.args
+        self.assertEqual(args[1:4], ('pr', 'create', '--title'))
+        self.assertNotIn(('reset', '--soft', 'HEAD~1'), calls)
+
+    def test_failed_push_undoes_commit(self):
+        _, calls, run = self.commit_pull_request(
+            [SimpleNamespace(returncode=1, stdout='', stderr='permission denied')])
+        with self.assertRaises(HTTPError) as raised:
+            run()
+        self.assertIn('nothing was committed', raised.exception.detail)
+        self.assertEqual(calls[-1], ('reset', '--soft', 'HEAD~1'))
+
+    def test_open_pull_request_is_updated_not_recreated(self):
+        gh = Mock()
+        _, _, run = self.commit_pull_request(
+            [SimpleNamespace(returncode=0, stdout='', stderr='')],
+            pull_request={'url': 'https://github.com/example/repo/pull/1', 'state': 'OPEN'},
+            gh=gh,
+        )
+        self.assertEqual(run()['url'], 'https://github.com/example/repo/pull/1')
+        gh.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

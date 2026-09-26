@@ -362,10 +362,14 @@ class _CommitDialog extends StatefulWidget {
   const _CommitDialog({
     required this.changedCount,
     required this.suggestedMessage,
+    required this.updatesPullRequest,
   });
 
   final int changedCount;
   final String suggestedMessage;
+
+  /// Whether the branch already has an open pull request that the push updates.
+  final bool updatesPullRequest;
 
   @override
   State<_CommitDialog> createState() => _CommitDialogState();
@@ -375,6 +379,7 @@ class _CommitDialogState extends State<_CommitDialog> {
   late final TextEditingController _message = TextEditingController(
     text: widget.suggestedMessage,
   );
+  String _autoMergeMethod = '';
 
   @override
   void dispose() {
@@ -384,17 +389,52 @@ class _CommitDialogState extends State<_CommitDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: Text(
-          'Commit ${widget.changedCount} changed file${widget.changedCount == 1 ? '' : 's'}',
-        ),
-        content: TextField(
-          controller: _message,
-          autofocus: true,
-          onChanged: (_) => setState(() {}),
-          onSubmitted: (_) => _commit(),
-          decoration: const InputDecoration(
-            labelText: 'Commit message',
-            helperText: 'Chosen by the agent; edit if needed.',
+        title: Text(widget.updatesPullRequest
+            ? 'Update pull request'
+            : 'Create pull request'),
+        content: SizedBox(
+          width: (MediaQuery.sizeOf(context).width - 48)
+              .clamp(280, 440)
+              .toDouble(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _message,
+                autofocus: true,
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _submit(),
+                decoration: InputDecoration(
+                  labelText: widget.updatesPullRequest
+                      ? 'Commit message'
+                      : 'Commit message and PR title',
+                  helperText:
+                      'Commits ${widget.changedCount} changed file${widget.changedCount == 1 ? '' : 's'}, '
+                      'pushes the branch, and ${widget.updatesPullRequest ? 'updates the open' : 'opens a'} pull request.',
+                  helperMaxLines: 3,
+                ),
+              ),
+              if (!widget.updatesPullRequest) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: _autoMergeMethod,
+                  decoration: const InputDecoration(
+                    labelText: 'Merge after checks pass',
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: '', child: Text('Off')),
+                    DropdownMenuItem(
+                      value: 'merge',
+                      child: Text('Auto: merge commit'),
+                    ),
+                    DropdownMenuItem(value: 'rebase', child: Text('Auto: rebase')),
+                    DropdownMenuItem(value: 'squash', child: Text('Auto: squash')),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _autoMergeMethod = value ?? ''),
+                ),
+              ],
+            ],
           ),
         ),
         actions: [
@@ -403,15 +443,20 @@ class _CommitDialogState extends State<_CommitDialog> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: _message.text.trim().isEmpty ? null : _commit,
-            child: const Text('Commit'),
+            onPressed: _message.text.trim().isEmpty ? null : _submit,
+            child: Text(widget.updatesPullRequest ? 'Update PR' : 'Create PR'),
           ),
         ],
       );
 
-  void _commit() {
+  void _submit() {
     final message = _message.text.trim();
-    if (message.isNotEmpty) Navigator.pop(context, message);
+    if (message.isNotEmpty) {
+      Navigator.pop(
+        context,
+        (message: message, autoMergeMethod: _autoMergeMethod),
+      );
+    }
   }
 }
 
@@ -1651,7 +1696,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     final status = _gitStatus;
     if (status == null || status.changedCount == 0 || _gitBusy) return;
     if (!_agentConnected) {
-      _showError('Connect $_agentLabel before creating a commit.');
+      _showError('Connect $_agentLabel before creating a pull request.');
       return;
     }
     String suggestedMessage;
@@ -1672,22 +1717,39 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     } finally {
       if (mounted) setState(() => _gitBusy = false);
     }
+    final updatesPullRequest = _hasOpenPullRequest(status);
     _terminalInteractionEnabled.value = false;
-    String? value;
+    ({String message, String autoMergeMethod})? value;
     try {
-      value = await showDialog<String>(
+      value = await showDialog<({String message, String autoMergeMethod})>(
         context: context,
         builder: (context) => _CommitDialog(
           changedCount: status.changedCount,
           suggestedMessage: suggestedMessage,
+          updatesPullRequest: updatesPullRequest,
         ),
       );
     } finally {
       _terminalInteractionEnabled.value = true;
     }
-    if (value == null || value.isEmpty) return;
-    await _runGitAction('/git/commit', {'message': value}, 'Commit created');
+    if (value == null || value.message.isEmpty) return;
+    await _runGitAction(
+      '/git/commit-pull-request',
+      {'message': value.message, 'autoMergeMethod': value.autoMergeMethod},
+      updatesPullRequest
+          ? 'Pull request updated'
+          : value.autoMergeMethod.isEmpty
+              ? 'Pull request created'
+              : 'Pull request created with auto-merge',
+    );
+    // A pull-request failure after a successful push is reported as an
+    // error, but the branch has still moved, so reload its state.
+    if (mounted) await _refreshGitStatus();
   }
+
+  bool _hasOpenPullRequest(GitStatus status) =>
+      status.prState == PullRequestState.open ||
+      status.prState == PullRequestState.autoMerge;
 
   Future<void> _pushChanges() async {
     final confirmed = await showDialog<bool>(
@@ -4242,7 +4304,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     };
     final primaryLabel = switch (state) {
       _GitPrimaryState.commit =>
-        'Commit ${status.changedCount} ${status.changedCount == 1 ? 'change' : 'changes'}',
+        _hasOpenPullRequest(status) ? 'Update PR' : 'Create PR',
       _GitPrimaryState.sync => 'Sync remote changes',
       _GitPrimaryState.publish => 'Publish branch',
       _GitPrimaryState.push =>
@@ -4358,7 +4420,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                             )
                           : Icon(
                               switch (state) {
-                                _GitPrimaryState.commit => Icons.commit,
+                                _GitPrimaryState.commit => Icons.call_merge_outlined,
                                 _GitPrimaryState.sync => Icons.sync,
                                 _GitPrimaryState.viewPullRequest =>
                                   Icons.open_in_new,
