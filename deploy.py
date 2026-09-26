@@ -1539,6 +1539,25 @@ def serve():
             await commit()
         return {"name": new_name}
 
+    @api.delete("/api/projects/{name}")
+    async def remove_project(name: str):
+        project = project_dir(name)
+        if (project / ".git").is_file():
+            raise HTTPException(400, "linked worktrees cannot be removed from the editor")
+        async with mutation_lock:
+            if any(project_name == name for project_name, _ in active_turns):
+                raise HTTPException(409, "stop the active agent turn before removing")
+            matching_keys = [key for key in terminal_sessions if key[0] == name]
+            sessions = [terminal_sessions.pop(key) for key in matching_keys]
+            for session in sessions:
+                await asyncio.to_thread(stop_terminal_session, session)
+            # The session directory holds the owner record and thread
+            # worktrees, so removing it drops the project from the list.
+            await asyncio.to_thread(shutil.rmtree, session_root / name, True)
+            await asyncio.to_thread(shutil.rmtree, project)
+            await commit()
+        return {"removed": name}
+
     @api.post("/api/projects/{name}/worktrees")
     async def create_worktree(name: str, request: Request):
         project = project_dir(name)

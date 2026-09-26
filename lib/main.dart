@@ -2233,17 +2233,47 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
-  Future<void> _closeProject() async {
+  Future<void> _removeProject() async {
     if (_project == null) return;
     if (_runningWorkThreads.isNotEmpty) {
-      _showError('Stop running work threads before closing the project.');
+      _showError('Stop running work threads before removing the project.');
       return;
     }
-    if (_dirty && !await _confirmDiscard()) return;
     final project = _project!;
-    for (final terminal in _terminals) {
-      unawaited(_closeTerminal(project.name, terminal.id));
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Remove project?'),
+            content: Text(
+              '${project.name} and all of its files, work threads, and '
+              'history will be permanently deleted from this workspace.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Remove'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    setState(() => _loading = true);
+    try {
+      await _request(
+        'DELETE',
+        '/api/projects/${Uri.encodeComponent(project.name)}',
+      );
+    } catch (error) {
+      _showError(error);
+      if (mounted) setState(() => _loading = false);
+      return;
     }
+    if (!mounted) return;
     _terminals.clear();
     _activeTerminalId = null;
     _terminalVisible = false;
@@ -2260,6 +2290,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       _threadHistory = const [];
       _gitSyncRequired = false;
       _error = null;
+      _projects = _projects.where((item) => item.name != project.name).toList();
+      _loading = false;
     });
   }
 
@@ -3209,7 +3241,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             tooltip: 'Project actions',
             onSelected: (value) {
               if (value == 'rename') _renameProject();
-              if (value == 'close') _closeProject();
+              if (value == 'remove') _removeProject();
             },
             itemBuilder: (context) => const [
               PopupMenuItem(
@@ -3221,11 +3253,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 ),
               ),
               PopupMenuItem(
-                value: 'close',
+                value: 'remove',
                 child: ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.close),
-                  title: Text('Close project'),
+                  leading: Icon(Icons.delete_outline),
+                  title: Text('Remove project'),
                 ),
               ),
             ],
@@ -3348,7 +3380,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               if (value == 'create') _createProject();
               if (value == 'connect') _connectAgent();
               if (value == 'rename') _renameProject();
-              if (value == 'close') _closeProject();
+              if (value == 'remove') _removeProject();
               if (value == 'logout') _logout();
             },
             itemBuilder: (context) => [
@@ -3379,11 +3411,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   ),
                 ),
                 const PopupMenuItem(
-                  value: 'close',
+                  value: 'remove',
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.close),
-                    title: Text('Close project'),
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('Remove project'),
                   ),
                 ),
               ],
