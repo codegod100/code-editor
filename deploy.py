@@ -3129,22 +3129,30 @@ def serve():
         """Return the environment Claude Code needs to authenticate, if any.
 
         A token saved through the UI takes precedence; otherwise credentials
-        supplied to the container environment are used as-is.
+        supplied to the container environment are used. A subscription token
+        (``claude setup-token``) is preferred over an API key.
+
+        The SDK layers this dict over the server's own environment, and Claude
+        Code ranks API keys above ``CLAUDE_CODE_OAUTH_TOKEN``, so subscription
+        auth blanks the API-key variables to keep an inherited key from
+        silently taking over billing.
         """
         try:
             saved = json.loads(claude_auth_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             saved = {}
         token = saved.get("token") if isinstance(saved, dict) else None
-        if isinstance(token, str) and token:
-            if token.startswith("sk-ant-oat"):
-                return {"CLAUDE_CODE_OAUTH_TOKEN": token}
-            return {"ANTHROPIC_API_KEY": token}
-        return {
-            key: os.environ[key]
-            for key in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
-            if os.environ.get(key)
-        }
+        if not (isinstance(token, str) and token):
+            token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
+        if not token:
+            return {}
+        if token.startswith("sk-ant-oat"):
+            return {
+                "CLAUDE_CODE_OAUTH_TOKEN": token,
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_AUTH_TOKEN": "",
+            }
+        return {"ANTHROPIC_API_KEY": token, "CLAUDE_CODE_OAUTH_TOKEN": ""}
 
     def claude_options(workspace: Path, system_prompt: str, can_use_tool, **extra) -> ClaudeAgentOptions:
         credentials = claude_credentials()
