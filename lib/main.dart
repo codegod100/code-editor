@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'git_status.dart';
+import 'work_thread_tab_list.dart';
 
 const _deployedVersion = String.fromEnvironment('APP_RELEASE');
 
@@ -3893,10 +3894,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         child: Row(
           children: [
             Expanded(
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
+              child: WorkThreadTabList(
                 itemCount: _workThreads.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 6),
                 itemBuilder: (context, index) {
                   final thread = _workThreads[index];
                   final selected = thread.id == _activeWorkThreadId;
