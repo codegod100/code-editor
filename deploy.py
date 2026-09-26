@@ -383,7 +383,7 @@ def serve():
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0d1117">
-  <title>{safe_title} · Codex Workspace</title>
+  <title>{safe_title}</title>
   <style>
     :root {{ color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0d1117; color: #f0f6fc; }}
     * {{ box-sizing: border-box; }}
@@ -416,8 +416,8 @@ def serve():
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0d1117">
-  <meta name="description" content="Sign in to Codex Workspace with your AT Protocol account.">
-  <title>Sign in · Codex Workspace</title>
+  <meta name="description" content="Sign in with your AT Protocol account.">
+  <title>Sign in</title>
   <style>
     :root {
       color-scheme: dark;
@@ -462,29 +462,6 @@ def serve():
         max(24px, env(safe-area-inset-right))
         max(20px, env(safe-area-inset-bottom))
         max(24px, env(safe-area-inset-left));
-    }
-
-    .brand {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      width: fit-content;
-      color: #f0f6fc;
-      font-size: 15px;
-      font-weight: 650;
-      letter-spacing: -.01em;
-    }
-
-    .brand-mark {
-      display: grid;
-      width: 30px;
-      height: 30px;
-      place-items: center;
-      border: 1px solid #3f4d68;
-      border-radius: 9px;
-      background: linear-gradient(145deg, #263659, #161b22);
-      color: #a9bdff;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, .22);
     }
 
     main {
@@ -655,7 +632,6 @@ def serve():
         border-radius: 14px;
       }
 
-      .brand { font-size: 14px; }
     }
 
     @media (max-height: 620px) and (orientation: landscape) {
@@ -675,16 +651,6 @@ def serve():
 </head>
 <body>
   <div class="shell">
-    <header class="brand" aria-label="Codex Workspace">
-      <span class="brand-mark" aria-hidden="true">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
-          <path d="m12 2 1.45 5.55L19 9l-5.55 1.45L12 16l-1.45-5.55L5 9l5.55-1.45L12 2Z" fill="currentColor"/>
-          <path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z" fill="currentColor" opacity=".72"/>
-        </svg>
-      </span>
-      <span>Codex Workspace</span>
-    </header>
-
     <main>
       <section class="card" aria-labelledby="sign-in-title">
         <p class="eyebrow">Secure workspace access</p>

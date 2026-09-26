@@ -18,7 +18,7 @@ class AgentWorkspaceApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Codex Workspace',
+        title: 'Workspace',
         debugShowCheckedModeBanner: false,
         theme: ThemeData.dark(useMaterial3: true).copyWith(
           scaffoldBackgroundColor: const Color(0xFF0D1117),
@@ -3088,7 +3088,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   PreferredSizeWidget _buildAppBar() {
     final project = _project;
     final projectLabel = project == null
-        ? 'Codex Workspace'
+        ? 'Select project'
         : project.repoUrl.isEmpty
             ? project.name
             : project.repoUrl;
@@ -3101,13 +3101,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       titleSpacing: 16,
       title: Row(
         children: [
-          const Icon(Icons.auto_awesome, size: 22),
-          const SizedBox(width: 10),
           Flexible(
             child: Text(
-              project == null
-                  ? projectLabel
-                  : 'Codex Workspace — $projectLabel',
+              projectLabel,
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -3268,12 +3264,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         titleSpacing: 12,
         title: Row(
           children: [
-            const Icon(Icons.auto_awesome, size: 20),
-            const SizedBox(width: 8),
             Expanded(
               child: _projects.isEmpty
                   ? Text(
-                      project?.name ?? 'Codex Workspace',
+                      project?.name ?? 'Select project',
                       overflow: TextOverflow.ellipsis,
                     )
                   : DropdownButtonHideUnderline(
