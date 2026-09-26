@@ -1242,12 +1242,21 @@ def serve():
         if initial_commit.returncode:
             raise HTTPException(500, git_error(initial_commit, "could not create the initial commit"))
 
-    def branch_pull_request(project: Path) -> dict | None:
+    def branch_pull_request(project: Path, branch: str) -> dict | None:
         # Query the checked-out branch so refreshes and project switches retain
-        # the PR lifecycle, including PRs created outside the editor.
+        # the PR lifecycle, including PRs created outside the editor. Pass the
+        # branch explicitly: after auto-merge (especially a rebase merge), gh
+        # can no longer infer the pull request from the checked-out branch and
+        # otherwise reports that no pull request exists.
         try:
             result = github_cli_result(
-                project, "pr", "view", "--json", "url,state,autoMergeRequest", timeout=10,
+                project,
+                "pr",
+                "view",
+                branch,
+                "--json",
+                "url,state,autoMergeRequest",
+                timeout=10,
             )
             if result.returncode:
                 return None
@@ -1298,7 +1307,11 @@ def serve():
             project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"
         )
         pr_available = shutil.which("gh") is not None
-        pull_request = branch_pull_request(project) if remote.returncode == 0 and pr_available else None
+        pull_request = (
+            branch_pull_request(project, branch)
+            if remote.returncode == 0 and pr_available and branch
+            else None
+        )
         return {
             "isRepo": True,
             "branch": branch,

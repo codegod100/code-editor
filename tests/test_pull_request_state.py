@@ -29,34 +29,40 @@ class HTTPError(Exception):
 
 
 class PullRequestStateTests(unittest.TestCase):
-    def lookup(self, result=None, error=None):
+    def lookup(self, result=None, error=None, branch='feature/rebased-work'):
         runner = Mock(return_value=result, side_effect=error)
         namespace = {
             'Path': Path, 'json': json, 'github_cli_result': runner,
             'subprocess': SimpleNamespace(run=runner, TimeoutExpired=subprocess.TimeoutExpired),
         }
         lookup = load_function('branch_pull_request', namespace)
-        return lookup(Path('/project'))
+        return lookup(Path('/project'), branch), runner
 
     def test_lifecycle_lookup(self):
         for state in ('OPEN', 'MERGED', 'CLOSED'):
             with self.subTest(state=state):
-                result = self.lookup(SimpleNamespace(returncode=0, stdout=json.dumps({
+                result, runner = self.lookup(SimpleNamespace(returncode=0, stdout=json.dumps({
                     'url': 'https://github.com/example/repo/pull/1',
                     'state': state, 'autoMergeRequest': {'enabledAt': 'now'},
                 })))
                 self.assertEqual(result['state'], state)
                 self.assertTrue(result['autoMergeEnabled'])
+                self.assertEqual(
+                    runner.call_args.args[1:5],
+                    ('pr', 'view', 'feature/rebased-work', '--json'),
+                )
 
     def test_absent_or_invalid_response(self):
         for code, output in ((1, ''), (0, 'not json'), (0, 'null'), (0, '{}')):
             with self.subTest(code=code, output=output):
-                self.assertIsNone(self.lookup(SimpleNamespace(returncode=code, stdout=output)))
+                result, _ = self.lookup(SimpleNamespace(returncode=code, stdout=output))
+                self.assertIsNone(result)
 
     def test_lookup_failure_does_not_break_git_status(self):
         for error in (OSError('missing gh'), subprocess.TimeoutExpired('gh', 10)):
             with self.subTest(error=error):
-                self.assertIsNone(self.lookup(error=error))
+                result, _ = self.lookup(error=error)
+                self.assertIsNone(result)
 
     def test_creation_retains_pr_when_auto_merge_fails(self):
         async def run():
