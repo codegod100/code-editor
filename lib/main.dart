@@ -686,18 +686,29 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     String url, [
     Map<String, dynamic>? body,
   ]) async {
-    final response = await html.HttpRequest.request(
-      url,
-      method: method,
-      sendData: body == null ? null : jsonEncode(body),
-      requestHeaders:
-          body == null ? const {} : const {'Content-Type': 'application/json'},
+    // HttpRequest.request rejects non-2xx responses with a bare ProgressEvent,
+    // which hides the server's error body. Resolve on load instead so API
+    // errors (including structured ones like rebase_conflict) reach callers.
+    final response = html.HttpRequest()..open(method, url);
+    if (body != null) {
+      response.setRequestHeader('Content-Type', 'application/json');
+    }
+    final loaded = Completer<void>();
+    response.onLoad.first.then((_) => loaded.complete());
+    response.onError.first.then(
+      (_) => loaded.completeError(_ApiException('Network error; try again')),
     );
+    response.send(body == null ? null : jsonEncode(body));
+    await loaded.future;
     final text = response.responseText ?? '';
     Map<String, dynamic> decoded = {};
     if (text.isNotEmpty) {
-      final value = jsonDecode(text);
-      if (value is Map<String, dynamic>) decoded = value;
+      try {
+        final value = jsonDecode(text);
+        if (value is Map<String, dynamic>) decoded = value;
+      } on FormatException {
+        // Non-JSON error pages (e.g. a proxy 502) fall through to the status.
+      }
     }
     final status = response.status ?? 0;
     if (status < 200 || status >= 300) {
@@ -1815,6 +1826,43 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           'Resolve the Git rebase conflict blocking source-control sync. Start by inspecting git status, log, and the relevant diffs. Run git pull --rebase; if it conflicts, manually reconcile every conflict to preserve the intent of both the local and remote commits. Do not use --ours, --theirs, --skip, reset, or force-push. Stage resolved files and run git rebase --continue. Run proportionate checks and git status when finished. If the intended resolution is ambiguous, stop and report the evidence without discarding changes.';
     });
     await _runAgent();
+  }
+
+  Future<void> _takeRemoteChanges() async {
+    if (_project == null || _gitBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Take remote version?'),
+        content: const Text(
+          'Your branch will be moved to match the remote. Your local commits are saved on a sync-backup branch first, so you can cherry-pick or push them later.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Take remote'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _gitBusy = true);
+    try {
+      final response =
+          await _request('POST', _projectUrl('/git/sync/take-remote'));
+      _gitSyncRequired = false;
+      _gitRebaseConflict = false;
+      await _refreshGitStatus();
+      _showError(response['message']?.toString() ?? 'Synced to remote');
+    } catch (error) {
+      _showError(error);
+    } finally {
+      if (mounted) setState(() => _gitBusy = false);
+    }
   }
 
   Future<void> _createPullRequest() async {
@@ -4322,6 +4370,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         : _resolveGitConflictWithAgent,
                     icon: const Icon(Icons.auto_fix_high_outlined, size: 17),
                     label: Text('Resolve rebase conflict with $_agentLabel'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _gitBusy || _agentBusy ? null : _takeRemoteChanges,
+                    icon: const Icon(Icons.cloud_download_outlined, size: 17),
+                    label: const Text('Take remote (back up my commits)'),
                   ),
                 ),
                 const SizedBox(height: 8),

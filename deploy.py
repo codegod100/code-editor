@@ -1929,6 +1929,46 @@ def serve():
             "status": await asyncio.to_thread(git_status, project),
         }
 
+    @api.post("/api/projects/{name}/git/sync/take-remote")
+    async def take_remote_branch(name: str):
+        """Move the branch to its upstream, keeping local commits on a backup branch."""
+        project = await resolve_active_workspace(name)
+        status = await asyncio.to_thread(git_status, project)
+        if not status["isRepo"] or not status["hasRemote"] or not status["hasUpstream"]:
+            raise HTTPException(400, "this branch has no upstream to take")
+        if status["changedCount"]:
+            raise HTTPException(400, "commit or discard local changes before syncing")
+        if not status["branch"]:
+            raise HTTPException(400, "cannot sync a detached HEAD")
+        async with mutation_lock:
+            fetch = await asyncio.to_thread(git_push_result, project, "fetch", "origin")
+            if fetch.returncode:
+                raise HTTPException(400, git_error(fetch, "could not fetch remote changes"))
+            backup = ""
+            if status["ahead"]:
+                # Never drop the local commits: pin them to a branch the user
+                # can inspect, cherry-pick, or push later.
+                backup = f"sync-backup/{status['branch']}-{time.strftime('%Y%m%d-%H%M%S')}"
+                created = await asyncio.to_thread(git_result, project, "branch", backup, "HEAD")
+                if created.returncode:
+                    raise HTTPException(
+                        500, git_error(created, "could not back up local commits")
+                    )
+            reset = await asyncio.to_thread(
+                git_result, project, "reset", "--hard", "@{upstream}"
+            )
+            if reset.returncode:
+                raise HTTPException(500, git_error(reset, "could not move branch to remote"))
+            await commit()
+        message = (
+            f"Synced to remote; local commits saved on {backup}" if backup else "Synced to remote"
+        )
+        return {
+            "message": message,
+            "backupBranch": backup,
+            "status": await asyncio.to_thread(git_status, project),
+        }
+
     @api.post("/api/projects/{name}/git/pull-request")
     async def create_pull_request(name: str, request: Request):
         project = await resolve_active_workspace(name)
