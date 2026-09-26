@@ -3186,43 +3186,85 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(width: 24),
-          if (_projects.isNotEmpty)
-            DropdownButtonHideUnderline(
-              child: DropdownButton<ProjectSummary>(
-                value: _project,
-                hint: const Text('Select project'),
-                items: _projects
-                    .map(
-                      (project) => DropdownMenuItem(
-                        value: project,
-                        child: Row(
-                          children: [
-                            Icon(
-                              project.isRepo
-                                  ? Icons.account_tree_outlined
-                                  : Icons.folder_outlined,
-                              size: 18,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(project.name),
-                            if (project.branch.isNotEmpty) ...[
-                              const SizedBox(width: 8),
-                              Text(
-                                project.branch,
-                                style: Theme.of(context).textTheme.labelSmall,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (project) {
-                  if (project != null) _selectProject(project);
-                },
+          if (_projects.isNotEmpty) ...[
+            const SizedBox(width: 16),
+            SizedBox(
+              height: 24,
+              child: VerticalDivider(
+                width: 1,
+                thickness: 1,
+                color: Theme.of(context).colorScheme.outlineVariant,
               ),
             ),
+            const SizedBox(width: 16),
+            Container(
+              padding: const EdgeInsets.only(left: 10, right: 4),
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<ProjectSummary>(
+                  value: _project,
+                  hint: const Text('Select project'),
+                  focusColor: Colors.transparent,
+                  isDense: true,
+                  items: _projects
+                      .map(
+                        (project) => DropdownMenuItem(
+                          value: project,
+                          child: Row(
+                            children: [
+                              Icon(
+                                project.isRepo
+                                    ? Icons.account_tree_outlined
+                                    : Icons.folder_outlined,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(project.name),
+                              if (project.branch.isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 1,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .outlineVariant,
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    project.branch,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (project) {
+                    if (project != null) _selectProject(project);
+                  },
+                ),
+              ),
+            ),
+          ],
         ],
       ),
       actions: [
