@@ -10,8 +10,6 @@ import 'package:flutter/services.dart';
 import 'git_status.dart';
 import 'work_thread_tab_list.dart';
 
-const _deployedVersion = String.fromEnvironment('APP_RELEASE');
-
 void main() => runApp(const AgentWorkspaceApp());
 
 class AgentWorkspaceApp extends StatelessWidget {
@@ -3210,13 +3208,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ],
       ),
       actions: [
-        Tooltip(
-          message: _deployedVersion,
-          child: Chip(
-            avatar: const Icon(Icons.code, size: 16),
-            label: Text('Release ${_deployedVersion.substring(0, 12)}'),
-          ),
-        ),
         TextButton.icon(
           onPressed: _project == null ? null : _openTerminal,
           icon: const Icon(Icons.terminal),
