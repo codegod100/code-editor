@@ -1773,6 +1773,178 @@ def serve():
             "status": await asyncio.to_thread(git_status, project),
         }
 
+    @api.post("/api/projects/{name}/git/commit-pull-request")
+    async def commit_and_create_pull_request(name: str, request: Request):
+        """Commit every change, push the branch, and open a pull request in one step.
+
+        A failed push undoes the new commit so the working tree returns to its
+        uncommitted state. The exception is a remote that moved ahead: the
+        commit is kept so the user can sync and then push it. Once the push has
+        landed it cannot be undone, so a pull-request failure is reported with
+        the branch already published and the Create pull request action ready.
+        """
+        project = await resolve_active_workspace(name)
+        body = await request.json()
+        message = str(body.get("message", "")).strip()
+        auto_merge_method = str(body.get("autoMergeMethod", "")).strip()
+        if not message:
+            raise HTTPException(400, "commit message is required")
+        method_flag = {"merge": "--merge", "rebase": "--rebase", "squash": "--squash"}.get(auto_merge_method)
+        if auto_merge_method and method_flag is None:
+            raise HTTPException(400, "auto-merge method must be merge, rebase, or squash")
+        status = await asyncio.to_thread(git_status, project)
+        if not status["isRepo"]:
+            raise HTTPException(400, "this project is not a Git repository")
+        if not status["hasRemote"]:
+            raise HTTPException(400, "this branch has no origin remote")
+        if not status["branch"]:
+            raise HTTPException(400, "cannot create a pull request from a detached HEAD")
+        if not status["changedCount"]:
+            raise HTTPException(400, "there are no changes to commit")
+        existing = status["pullRequest"]
+        reuse_pull_request = existing is not None and existing.get("state") == "OPEN"
+        if not reuse_pull_request and not shutil.which("gh"):
+            raise HTTPException(503, "GitHub CLI is unavailable in this deployment")
+        async with mutation_lock:
+            add = await asyncio.to_thread(git_result, project, "add", "-A", "--", ".")
+            if add.returncode:
+                raise HTTPException(400, git_error(add, "could not stage changes"))
+            commit_result = await asyncio.to_thread(
+                git_result,
+                project,
+                "-c",
+                "user.name=Cloud Code Editor",
+                "-c",
+                "user.email=cloud-code-editor@users.noreply.github.com",
+                "commit",
+                "-m",
+                message,
+            )
+            if commit_result.returncode:
+                raise HTTPException(400, git_error(commit_result, "could not create commit"))
+
+            async def undo_commit() -> None:
+                await asyncio.to_thread(git_result, project, "reset", "--soft", "HEAD~1")
+
+            push_args = ("push",) if status["hasUpstream"] else (
+                "push",
+                "--set-upstream",
+                "origin",
+                "HEAD",
+            )
+            try:
+                push = await asyncio.to_thread(git_push_result, project, *push_args)
+            except subprocess.TimeoutExpired as exc:
+                await undo_commit()
+                await commit()
+                raise HTTPException(504, "Git push timed out; nothing was committed") from exc
+            except OSError as exc:
+                await undo_commit()
+                await commit()
+                raise HTTPException(500, f"could not start Git: {exc}") from exc
+            if push.returncode:
+                diagnostic = git_error(push, "could not push branch")
+                if any(
+                    marker in diagnostic.lower()
+                    for marker in ("fetch first", "non-fast-forward", "failed to push some refs")
+                ):
+                    # Keep the commit: syncing requires a clean tree, and the
+                    # rebase then carries this commit on top of the remote.
+                    await asyncio.to_thread(git_push_result, project, "fetch", "origin")
+                    await commit()
+                    return {
+                        "state": "sync_required",
+                        "message": "Committed locally, but the remote branch has new commits. "
+                        "Sync them, then push and create the pull request.",
+                        "status": await asyncio.to_thread(git_status, project),
+                    }
+                await undo_commit()
+                await commit()
+                raise HTTPException(400, f"{diagnostic}; nothing was committed")
+
+            if reuse_pull_request:
+                await commit()
+                return {
+                    "message": "Pushed to the open pull request",
+                    "url": existing["url"],
+                    "status": await asyncio.to_thread(git_status, project),
+                }
+
+            try:
+                draft = await asyncio.to_thread(git_draft, project, "pull-request")
+                pull = await asyncio.to_thread(
+                    github_cli_result,
+                    project,
+                    "pr",
+                    "create",
+                    "--title",
+                    message,
+                    "--body",
+                    draft["description"],
+                    "--base",
+                    draft["base"],
+                )
+            except HTTPException as exc:
+                await commit()
+                raise HTTPException(
+                    exc.status_code,
+                    f"Changes were pushed, but the pull request could not be created: {exc.detail}",
+                ) from exc
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                await commit()
+                raise HTTPException(
+                    502, f"Changes were pushed, but the pull request could not be created: {exc}"
+                ) from exc
+            if pull.returncode:
+                await commit()
+                raise HTTPException(
+                    400,
+                    "Changes were pushed, but the pull request could not be created: "
+                    + git_error(pull, "unknown error"),
+                )
+            pull_request_url = pull.stdout.strip()
+            warning = None
+            auto_merge_enabled = False
+            if method_flag is not None:
+                try:
+                    auto_merge = await asyncio.to_thread(
+                        github_cli_result,
+                        project,
+                        "pr",
+                        "merge",
+                        pull_request_url,
+                        "--auto",
+                        method_flag,
+                    )
+                    auto_merge_enabled = auto_merge.returncode == 0
+                    if not auto_merge_enabled:
+                        warning = (
+                            "Pull request was created, but auto-merge could not be enabled yet; "
+                            "monitoring will retry: " + git_error(auto_merge, "unknown error")
+                        )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    warning = (
+                        "Pull request was created, but auto-merge could not be confirmed; "
+                        f"monitoring will retry: {exc}"
+                    )
+                if warning:
+                    print(warning, file=sys.stderr)
+                watch_pull_request_merge(project, pull_request_url, method_flag)
+            await commit()
+        status = await asyncio.to_thread(git_status, project)
+        if status["pullRequest"] is None:
+            status["pullRequest"] = {
+                "url": pull_request_url, "state": "OPEN",
+                "autoMergeEnabled": auto_merge_enabled,
+            }
+        return {
+            "url": pull_request_url,
+            "autoMergeEnabled": auto_merge_enabled,
+            "autoMergeMonitoring": method_flag is not None,
+            "status": status,
+            "warning": warning,
+        }
+
     @api.post("/api/projects/{name}/git/push")
     async def push_branch(name: str):
         project = await resolve_active_workspace(name)
