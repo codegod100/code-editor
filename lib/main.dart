@@ -443,7 +443,7 @@ class _CommitDialogState extends State<_CommitDialog> {
           onSubmitted: (_) => _commit(),
           decoration: const InputDecoration(
             labelText: 'Commit message',
-            helperText: 'Chosen by Codex; edit if needed.',
+            helperText: 'Chosen by the agent; edit if needed.',
           ),
         ),
         actions: [
@@ -473,10 +473,21 @@ class WorkspaceScreen extends StatefulWidget {
 
 enum _AgentPanelTab { chat, sourceControl, freeq }
 
+/// The coding agent that runs work-thread turns and drafts commit messages.
+enum _AgentMode {
+  codex('Codex'),
+  claude('Claude Code');
+
+  const _AgentMode(this.label);
+
+  final String label;
+}
+
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
   static const _lastProjectStorageKey = 'cloud-code-editor.last-project';
   static const _lastFreeqCapabilityStorageKey =
       'cloud-code-editor.last-freeq-capability';
+  static const _agentModeStorageKey = 'cloud-code-editor.agent-mode';
 
   final _code = SyntaxHighlightingController();
   final _agentPrompt = TextEditingController();
@@ -511,6 +522,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   List<String> _agentActivity = const [];
   String _streamedResponse = '';
   bool _codexConnected = false;
+  bool _claudeConnected = false;
+  _AgentMode _agentMode = _AgentMode.values.firstWhere(
+    (mode) => mode.name == html.window.localStorage[_agentModeStorageKey],
+    orElse: () => _AgentMode.codex,
+  );
   GitStatus? _gitStatus;
   bool _gitBusy = false;
   bool _gitSyncRequired = false;
@@ -719,6 +735,23 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     html.window.localStorage[_lastFreeqCapabilityStorageKey] = capability;
   }
 
+  String get _agentLabel => _agentMode.label;
+
+  bool get _agentConnected => switch (_agentMode) {
+        _AgentMode.codex => _codexConnected,
+        _AgentMode.claude => _claudeConnected,
+      };
+
+  void _setAgentMode(_AgentMode mode) {
+    html.window.localStorage[_agentModeStorageKey] = mode.name;
+    setState(() => _agentMode = mode);
+  }
+
+  void _connectAgent() => switch (_agentMode) {
+        _AgentMode.codex => _connectCodex(),
+        _AgentMode.claude => unawaited(_connectClaude()),
+      };
+
   Future<void> _loadInitial() async {
     try {
       // Account details do not affect which project opens. Keep them off the
@@ -755,12 +788,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       final values = await Future.wait([
         _request('GET', '/api/codex/status'),
         _request('GET', '/api/me'),
+        _request('GET', '/api/claude/status'),
       ]);
       if (!mounted) return;
       setState(() {
         _codexConnected = values[0]['authenticated'] as bool? ?? false;
         _userName = values[1]['name'] as String? ?? '';
         _userEmail = values[1]['did'] as String? ?? '';
+        _claudeConnected = values[2]['authenticated'] as bool? ?? false;
       });
     } catch (error) {
       if (mounted) _showError(error);
@@ -1652,8 +1687,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   Future<void> _commitChanges() async {
     final status = _gitStatus;
     if (status == null || status.changedCount == 0 || _gitBusy) return;
-    if (!_codexConnected) {
-      _showError('Connect Codex before creating a commit.');
+    if (!_agentConnected) {
+      _showError('Connect $_agentLabel before creating a commit.');
       return;
     }
     String suggestedMessage;
@@ -1662,10 +1697,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       final suggestion = await _request(
         'POST',
         _projectUrl('/git/commit-message'),
+        {'agent': _agentMode.name},
       );
       suggestedMessage = suggestion['message'] as String? ?? '';
       if (suggestedMessage.isEmpty) {
-        throw StateError('Codex returned an empty commit message');
+        throw StateError('$_agentLabel returned an empty commit message');
       }
     } catch (error) {
       _showError(error);
@@ -1739,22 +1775,26 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
-  Future<void> _resolveGitConflictWithCodex() async {
+  Future<void> _resolveGitConflictWithAgent() async {
     if (!_gitRebaseConflict || _agentBusy) return;
-    if (!_codexConnected) {
-      _showError('Connect Codex before asking it to resolve a rebase conflict.');
+    if (!_agentConnected) {
+      _showError(
+        'Connect $_agentLabel before asking it to resolve a rebase conflict.',
+      );
       return;
     }
     if (_dirty) {
-      _showError('Save the open file before asking Codex to resolve the conflict.');
+      _showError(
+        'Save the open file before asking $_agentLabel to resolve the conflict.',
+      );
       return;
     }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Resolve rebase conflict with Codex?'),
-        content: const Text(
-          'Codex will inspect both versions and reconcile the conflict. It will not discard either side, skip commits, reset the branch, or force-push.',
+        title: Text('Resolve rebase conflict with $_agentLabel?'),
+        content: Text(
+          '$_agentLabel will inspect both versions and reconcile the conflict. It will not discard either side, skip commits, reset the branch, or force-push.',
         ),
         actions: [
           TextButton(
@@ -1763,7 +1803,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Ask Codex'),
+            child: Text('Ask $_agentLabel'),
           ),
         ],
       ),
@@ -2018,7 +2058,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'A worktree has its own checkout and new branch, so Codex can work without changing this workspace. '
+                'A worktree has its own checkout and new branch, so the agent can work without changing this workspace. '
                 'Main is updated from origin before the worktree is created.',
               ),
               const SizedBox(height: 16),
@@ -2205,6 +2245,84 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     });
   }
 
+  Future<void> _connectClaude() async {
+    final token = TextEditingController();
+    _terminalInteractionEnabled.value = false;
+    String? value;
+    try {
+      value = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Connect Claude Code'),
+          content: SizedBox(
+            width: _dialogWidth(context, 440),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Run `claude setup-token` on a machine where Claude Code is '
+                  'signed in and paste the token it prints, or paste an '
+                  'Anthropic API key. It is stored on the workspace disk and '
+                  'shared by every Claude Code turn in this app.',
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: token,
+                  autofocus: true,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Token or API key',
+                    hintText: 'sk-ant-…',
+                  ),
+                  onSubmitted: (text) => Navigator.pop(context, text.trim()),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, token.text.trim()),
+              child: const Text('Connect'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      _terminalInteractionEnabled.value = true;
+      token.dispose();
+    }
+    if (value == null || value.isEmpty || !mounted) return;
+    try {
+      final result =
+          await _request('POST', '/api/claude/login', {'token': value});
+      if (mounted) {
+        setState(() {
+          _claudeConnected = result['authenticated'] as bool? ?? false;
+        });
+      }
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _disconnectClaude() async {
+    try {
+      final result = await _request('DELETE', '/api/claude/login');
+      if (mounted) {
+        setState(() {
+          _claudeConnected = result['authenticated'] as bool? ?? false;
+        });
+      }
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
   void _updateWorkThreadMessages(
     String threadId,
     List<AgentMessage> messages, {
@@ -2273,8 +2391,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (_project == null || _agentBusy) return;
     final prompt = _agentPrompt.text.trim();
     if (prompt.isEmpty && _pastedImages.isEmpty) return;
-    if (!_codexConnected) {
-      _showError('Connect Codex before starting an agent turn.');
+    if (!_agentConnected) {
+      _showError('Connect $_agentLabel before starting an agent turn.');
       return;
     }
     if (_dirty) {
@@ -2298,7 +2416,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ..._messages,
         AgentMessage(role: 'user', text: displayPrompt),
       ];
-      _agentActivity = const ['Starting Codex…'];
+      _agentActivity = ['Starting $_agentLabel…'];
       _streamedResponse = '';
       _workThreadActivity[workThreadId] = _agentActivity;
       _workThreadStreams[workThreadId] = '';
@@ -2320,6 +2438,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       final started = await _request('POST', _projectUrl('/agent'), {
         'prompt': prompt,
         'threadId': workThreadId,
+        'agent': _agentMode.name,
         'images': pastedImages.map((image) => image.dataUrl).toList(),
       });
       final runId = started['runId'] as String?;
@@ -3071,15 +3190,25 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         const SizedBox(width: 8),
         Padding(
           padding: const EdgeInsets.only(right: 4),
-          child: _codexConnected
-              ? const Chip(
-                  avatar: Icon(Icons.check_circle, size: 16),
-                  label: Text('Codex connected'),
+          child: _agentConnected
+              ? InputChip(
+                  avatar: const Icon(Icons.check_circle, size: 16),
+                  label: Text('$_agentLabel connected'),
+                  tooltip: _agentMode == _AgentMode.claude
+                      ? 'Replace the Claude Code token'
+                      : null,
+                  onPressed: _agentMode == _AgentMode.claude
+                      ? () => unawaited(_connectClaude())
+                      : null,
+                  onDeleted: _agentMode == _AgentMode.claude
+                      ? () => unawaited(_disconnectClaude())
+                      : null,
+                  deleteButtonTooltipMessage: 'Disconnect Claude Code',
                 )
               : FilledButton.tonalIcon(
-                  onPressed: _connectCodex,
+                  onPressed: _connectAgent,
                   icon: const Icon(Icons.link),
-                  label: const Text('Connect Codex'),
+                  label: Text('Connect $_agentLabel'),
                 ),
         ),
         PopupMenuButton<String>(
@@ -3173,7 +3302,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             tooltip: 'Workspace actions',
             onSelected: (value) {
               if (value == 'create') _createProject();
-              if (value == 'connect') _connectCodex();
+              if (value == 'connect') _connectAgent();
               if (value == 'rename') _renameProject();
               if (value == 'close') _closeProject();
               if (value == 'logout') _logout();
@@ -3187,13 +3316,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   title: Text('Add project'),
                 ),
               ),
-              if (!_codexConnected)
-                const PopupMenuItem(
+              if (!_agentConnected)
+                PopupMenuItem(
                   value: 'connect',
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.link),
-                    title: Text('Connect Codex'),
+                    leading: const Icon(Icons.link),
+                    title: Text('Connect $_agentLabel'),
                   ),
                 ),
               if (project != null) ...[
@@ -3268,7 +3397,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   ),
                   const SizedBox(height: 10),
                   const Text(
-                    'Create a folder or clone a repository. Files and Codex threads are stored on the project disk and survive redeploys.',
+                    'Create a folder or clone a repository. Files and agent threads are stored on the project disk and survive redeploys.',
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
@@ -3809,6 +3938,30 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         ),
       );
 
+  Widget _buildAgentModePicker() => PopupMenuButton<_AgentMode>(
+        tooltip: 'Agent mode',
+        enabled: !_agentBusy,
+        initialValue: _agentMode,
+        onSelected: _setAgentMode,
+        itemBuilder: (context) => [
+          for (final mode in _AgentMode.values)
+            CheckedPopupMenuItem(
+              value: mode,
+              checked: mode == _agentMode,
+              child: Text(mode.label),
+            ),
+        ],
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.smart_toy_outlined, size: 16),
+            const SizedBox(width: 4),
+            Text(_agentLabel, style: Theme.of(context).textTheme.labelMedium),
+            const Icon(Icons.arrow_drop_down, size: 18),
+          ],
+        ),
+      );
+
   Widget _buildAgentConversation() => Column(
         children: [
           Expanded(
@@ -3821,7 +3974,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                         const Icon(Icons.auto_awesome_outlined, size: 42),
                         const SizedBox(height: 16),
                         Text(
-                          'Ask Codex to work in ${_project?.name}',
+                          'Ask $_agentLabel to work in ${_project?.name}',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
@@ -3855,8 +4008,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                                   SizedBox(width: 10),
                                   Text(
                                     _agentStopping
-                                        ? 'Stopping Codex…'
-                                        : 'Codex is working…',
+                                        ? 'Stopping $_agentLabel…'
+                                        : '$_agentLabel is working…',
                                   ),
                                 ],
                               ),
@@ -4012,7 +4165,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                       maxLines: 6,
                       decoration: InputDecoration(
                         hintText:
-                            'Ask Codex to change this project… Paste images to attach.',
+                            'Ask $_agentLabel to change this project… Paste images to attach.',
                         helperText: _isMobile ? null : 'Ctrl/Cmd+Enter to run',
                       ),
                     ),
@@ -4021,11 +4174,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    Text(
-                      _codexConnected
-                          ? 'Workspace write'
-                          : 'Codex not connected',
-                      style: Theme.of(context).textTheme.labelSmall,
+                    _buildAgentModePicker(),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        _agentConnected
+                            ? 'Workspace write'
+                            : '$_agentLabel not connected',
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
                     ),
                     const Spacer(),
                     FilledButton.icon(
@@ -4161,9 +4319,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   child: OutlinedButton.icon(
                     onPressed: _gitBusy || _agentBusy
                         ? null
-                        : _resolveGitConflictWithCodex,
+                        : _resolveGitConflictWithAgent,
                     icon: const Icon(Icons.auto_fix_high_outlined, size: 17),
-                    label: const Text('Resolve rebase conflict with Codex'),
+                    label: Text('Resolve rebase conflict with $_agentLabel'),
                   ),
                 ),
                 const SizedBox(height: 8),

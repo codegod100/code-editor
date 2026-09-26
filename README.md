@@ -17,6 +17,29 @@ The Flutter UI and FastAPI backend deploy together as one Modal application.
 - Requires AT Protocol OAuth authentication before serving the UI or any API.
 - Authenticates Codex with ChatGPT device login; no API key is embedded in the
   app or frontend.
+- Offers a selectable agent mode — **Codex** or **Claude Code** — for work-thread
+  turns, commit-message suggestions, and rebase-conflict resolution.
+
+## Agent modes
+
+Pick the agent from the mode menu under the Agent panel's prompt box. The choice
+is remembered per browser. Both agents share each work thread's checkout and
+message history: when a thread is first continued with a different agent, the
+recent conversation is passed along as context, and each agent resumes its own
+session on later turns.
+
+Claude Code runs through the Claude Agent SDK, which bundles the Claude Code
+CLI. It loads the project's `CLAUDE.md`, skills, and `.claude` settings, and its
+resumable session transcripts live in `/workspace/.claude`. Edits are
+auto-accepted inside the thread's checkout and denied outside it. Unlike Codex's
+`workspace-write` sandbox, shell commands are not sandboxed.
+
+To connect it, select **Claude Code**, choose **Connect Claude Code**, and paste
+either a long-lived token from `claude setup-token` or an Anthropic API key.
+The token is stored with mode `0600` at `/workspace/.system/claude-auth.json`;
+clicking the chip's remove icon deletes it. Alternatively, supply
+`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` to the container environment.
+The CI failure repair webhook continues to use Codex.
 
 ## Storage
 
@@ -34,6 +57,8 @@ All mutable state is on the Modal v2 Volume
   that project's isolated work threads; these are not separate UI projects.
 - `/workspace/.codex` is `CODEX_HOME` and contains the server-side Codex login
   and runtime state.
+- `/workspace/.claude` is `CLAUDE_CONFIG_DIR` and holds Claude Code session
+  transcripts; `/workspace/.system/claude-auth.json` holds its token.
 - `/workspace/.freeq-bots` holds the did:key identity and delegation certificate
   used by the FreeQ handoff sender. It is mounted on the same durable Volume,
   so its identity survives restarts.
@@ -247,7 +272,8 @@ After signing in with an AT Protocol handle or DID:
 
 1. Select **Project** to create a folder or clone an HTTP(S)/SSH repository.
 2. Select **Connect Codex**, open the verification page, and enter the shown
-   device code.
+   device code — or switch the agent mode to **Claude Code** and connect it
+   with a token (see [Agent modes](#agent-modes)).
 3. Open files in the explorer or ask the agent to work on the current project.
 
 Repository credentials are not accepted by the UI. Private clones require Git

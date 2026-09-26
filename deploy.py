@@ -143,6 +143,8 @@ base_image = (
         "fastapi[standard]==0.121.3",
         "itsdangerous==2.2.0",
         "openai-codex==0.156.1",
+        # Bundles its own Claude Code CLI, so no separate npm install is needed.
+        "claude-agent-sdk==0.2.160",
     )
     .workdir("/app")
     .run_commands(
@@ -193,6 +195,8 @@ image = (
             "APP_RELEASE": release_version,
             RELEASE_VERSION_ENV: release_version,
             "CODEX_HOME": "/workspace/.codex",
+            # Claude Code keeps resumable session transcripts here.
+            "CLAUDE_CONFIG_DIR": "/workspace/.claude",
         }
     )
 )
@@ -211,8 +215,9 @@ image = (
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def serve():
-    """Serve the editor UI and its project/Codex API from one origin."""
+    """Serve the editor UI and its project/agent API from one origin."""
     import asyncio
+    import base64
     import hmac
     import html
     import json
@@ -229,6 +234,18 @@ def serve():
     from urllib.parse import quote, unquote, urlparse
     from urllib.request import urlopen
     from fastapi.staticfiles import StaticFiles
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ClaudeAgentOptions,
+        ClaudeSDKClient,
+        PermissionResultAllow,
+        PermissionResultDeny,
+        ResultMessage,
+        StreamEvent,
+        TextBlock,
+        ThinkingBlock,
+        ToolUseBlock,
+    )
     from openai_codex import ApprovalMode, AsyncCodex, ImageInput, Sandbox, TextInput
     from starlette.middleware.sessions import SessionMiddleware
 
@@ -236,10 +253,11 @@ def serve():
     root = Path("/workspace")
     root.mkdir(parents=True, exist_ok=True)
     (root / ".codex").mkdir(parents=True, exist_ok=True)
+    (root / ".claude").mkdir(parents=True, exist_ok=True)
     session_root = root / ".code-editor"
     session_root.mkdir(parents=True, exist_ok=True)
     project_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-    reserved = {".atproto-oauth", ".code-editor", ".codex", ".freeq-bots", ".system"}
+    reserved = {".atproto-oauth", ".claude", ".code-editor", ".codex", ".freeq-bots", ".system"}
     max_text_bytes = 2 * 1024 * 1024
     mutation_lock = asyncio.Lock()
     active_turns = {}
@@ -1639,14 +1657,22 @@ def serve():
         )
 
     @api.post("/api/projects/{name}/git/commit-message")
-    async def suggest_commit_message(name: str):
-        """Have Codex inspect the working tree and choose a concise commit subject."""
+    async def suggest_commit_message(name: str, request: Request):
+        """Have the selected agent inspect the working tree and choose a commit subject."""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        agent = requested_agent(body.get("agent") if isinstance(body, dict) else None)
         project = await resolve_active_workspace(name)
         status = await asyncio.to_thread(git_status, project)
         if not status["isRepo"]:
             raise HTTPException(400, "this project is not a Git repository")
         if not status["changedCount"]:
             raise HTTPException(400, "there are no changes to commit")
+
+        if agent == "claude":
+            return {"message": await claude_commit_message(project)}
 
         response_parts = []
         completed_response = ""
@@ -1689,6 +1715,39 @@ def serve():
         if not message:
             raise HTTPException(502, "Codex returned an empty commit message")
         return {"message": message}
+
+    async def claude_commit_message(project: Path) -> str:
+        if not claude_credentials():
+            raise HTTPException(401, "connect Claude Code before creating a commit")
+        options = claude_options(
+            project,
+            "Do not edit files, change Git state, or make network requests. Your only "
+            "job is to inspect the current uncommitted Git changes and return a commit message.",
+            read_only_git_guard,
+            tools=["Bash", "Read", "Glob", "Grep"],
+            max_turns=12,
+        )
+        result = None
+        try:
+            async with ClaudeSDKClient(options=options) as client:
+                await client.query(
+                    "Inspect the uncommitted changes in this repository and choose a precise, "
+                    "concise imperative Git commit subject. Return only the subject line: no "
+                    "quotes, markdown, explanation, or body."
+                )
+                async for message in client.receive_response():
+                    if isinstance(message, ResultMessage):
+                        result = message
+        except Exception as exc:
+            raise HTTPException(502, f"Claude Code could not create a commit message: {exc}") from exc
+        if result is None or result.is_error:
+            detail = (result.result or result.subtype) if result else "no result"
+            raise HTTPException(502, f"Claude Code could not create a commit message: {detail}")
+        lines = (result.result or "").strip().splitlines()
+        message = lines[0].strip().strip("`\"'") if lines else ""
+        if not message:
+            raise HTTPException(502, "Claude Code returned an empty commit message")
+        return message
 
     @api.post("/api/projects/{name}/git/commit")
     async def create_commit(name: str, request: Request):
@@ -2066,6 +2125,7 @@ def serve():
             history.append({
                 "name": thread.get("title", "Untitled thread"),
                 "threadId": thread.get("threadId"),
+                "claudeSessionId": thread.get("claudeSessionId"),
                 "worktree": thread.get("worktree"),
                 "branch": thread.get("branch"),
                 "messages": thread.get("messages", []),
@@ -2154,6 +2214,7 @@ def serve():
                 "id": os.urandom(8).hex(),
                 "title": title,
                 "threadId": archived.get("threadId"),
+                "claudeSessionId": archived.get("claudeSessionId"),
                 "worktree": archived.get("worktree"),
                 "branch": archived.get("branch"),
                 "messages": messages,
@@ -2821,6 +2882,169 @@ def serve():
         finally:
             output_task.cancel()
 
+    agent_names = {"codex": "Codex", "claude": "Claude Code"}
+    claude_auth_path = root / ".system" / "claude-auth.json"
+    claude_edit_tools = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
+
+    def requested_agent(value) -> str:
+        agent = str(value or "codex").strip().lower()
+        if agent not in agent_names:
+            raise HTTPException(400, "agent must be 'codex' or 'claude'")
+        return agent
+
+    def claude_credentials() -> dict[str, str]:
+        """Return the environment Claude Code needs to authenticate, if any.
+
+        A token saved through the UI takes precedence; otherwise credentials
+        supplied to the container environment are used as-is.
+        """
+        try:
+            saved = json.loads(claude_auth_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = {}
+        token = saved.get("token") if isinstance(saved, dict) else None
+        if isinstance(token, str) and token:
+            if token.startswith("sk-ant-oat"):
+                return {"CLAUDE_CODE_OAUTH_TOKEN": token}
+            return {"ANTHROPIC_API_KEY": token}
+        return {
+            key: os.environ[key]
+            for key in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+            if os.environ.get(key)
+        }
+
+    def claude_options(workspace: Path, system_prompt: str, can_use_tool, **extra) -> ClaudeAgentOptions:
+        credentials = claude_credentials()
+        if not credentials:
+            raise RuntimeError("connect Claude Code before running it")
+        return ClaudeAgentOptions(
+            cwd=str(workspace),
+            system_prompt={
+                "type": "preset",
+                "preset": "claude_code",
+                "append": system_prompt,
+            },
+            # Tools not auto-accepted by this mode are decided by can_use_tool.
+            permission_mode="acceptEdits",
+            can_use_tool=can_use_tool,
+            # Honor the repository's CLAUDE.md, skills, and .claude settings,
+            # but not settings from the shared server-wide config directory.
+            setting_sources=["project"],
+            env=credentials,
+            stderr=lambda line: print(f"claude-code: {line}", flush=True),
+            **extra,
+        )
+
+    def workspace_tool_guard(workspace: Path):
+        """Allow tools, but keep file edits inside the thread's checkout."""
+        boundary = workspace.resolve()
+
+        async def can_use_tool(tool_name, tool_input, context):
+            if tool_name in claude_edit_tools:
+                target = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+                resolved = (boundary / str(target)).resolve()
+                if resolved != boundary and boundary not in resolved.parents:
+                    return PermissionResultDeny(
+                        message="Edits are limited to the current project checkout."
+                    )
+            return PermissionResultAllow()
+
+        return can_use_tool
+
+    async def read_only_git_guard(tool_name, tool_input, context):
+        """Let Claude inspect changes without modifying the checkout."""
+        if tool_name in {"Read", "Glob", "Grep"}:
+            return PermissionResultAllow()
+        if tool_name == "Bash":
+            command = str(tool_input.get("command", "")).strip()
+            if re.fullmatch(r"git (?:status|diff|log|show)(?: [^;&|<>`$()\n]*)?", command):
+                return PermissionResultAllow()
+        return PermissionResultDeny(message="Only read-only Git inspection is allowed.")
+
+    def claude_image_block(data_url: str) -> dict:
+        header, _, data = data_url.partition(",")
+        media_type = header.removeprefix("data:").split(";", 1)[0]
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        }
+
+    def claude_activity(message) -> list[dict]:
+        """Turn Claude Code messages into the same progress updates Codex emits."""
+        if not isinstance(message, AssistantMessage) or message.parent_tool_use_id:
+            return []
+        updates = []
+        for block in message.content:
+            if isinstance(block, ThinkingBlock):
+                updates.append({"type": "activity", "text": "Planning the next step"})
+            elif isinstance(block, ToolUseBlock):
+                tool_input = block.input or {}
+                if block.name == "Bash":
+                    command = " ".join(str(tool_input.get("command", "")).split())
+                    updates.append({"type": "activity", "text": f"Running: {command}"})
+                elif block.name in claude_edit_tools:
+                    path = tool_input.get("file_path") or tool_input.get("notebook_path") or "files"
+                    updates.append({"type": "activity", "text": f"Editing {path}"})
+                elif block.name in {"Read", "Glob", "Grep"}:
+                    target = (
+                        tool_input.get("file_path")
+                        or tool_input.get("pattern")
+                        or ""
+                    )
+                    updates.append({"type": "activity", "text": f"{block.name} {target}".strip()})
+                else:
+                    updates.append({"type": "activity", "text": f"Using {block.name}"})
+        return updates
+
+    def conversation_context(messages: list, agent: str) -> str:
+        """Summarize earlier turns for an agent joining an existing thread."""
+        recent = [
+            item for item in messages[-12:]
+            if isinstance(item, dict) and str(item.get("text", "")).strip()
+        ]
+        if not recent:
+            return ""
+        lines = []
+        for item in recent:
+            speaker = "User" if item.get("role") == "user" else agent_names.get(
+                str(item.get("agent") or "codex"), "Assistant"
+            )
+            text = str(item.get("text", "")).strip()
+            if len(text) > 2000:
+                text = text[:2000] + " …"
+            lines.append(f"{speaker}: {text}")
+        return (
+            "Earlier conversation in this work thread (for context; another agent "
+            "may have handled some of it):\n\n" + "\n\n".join(lines) + "\n\n---\n\n"
+        )
+
+    @api.get("/api/claude/status")
+    async def claude_status():
+        return {"authenticated": bool(claude_credentials())}
+
+    @api.post("/api/claude/login")
+    async def claude_login(request: Request):
+        token = str((await request.json()).get("token", "")).strip()
+        if not re.fullmatch(r"sk-ant-[A-Za-z0-9_-]{20,400}", token):
+            raise HTTPException(
+                400,
+                "paste a token from `claude setup-token` (sk-ant-oat…) or an Anthropic API key (sk-ant-api…)",
+            )
+        async with mutation_lock:
+            claude_auth_path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(claude_auth_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump({"token": token}, handle)
+            await commit()
+        return {"authenticated": True}
+
+    @api.delete("/api/claude/login")
+    async def claude_logout():
+        async with mutation_lock:
+            claude_auth_path.unlink(missing_ok=True)
+            await commit()
+        return {"authenticated": bool(claude_credentials())}
+
     @api.get("/api/codex/status")
     async def codex_status():
         try:
@@ -2884,10 +3108,113 @@ def serve():
             return {"type": "activity", "text": "Preparing a response"}
         return None
 
+    agent_instructions = (
+        "Work only inside the current project. Inspect the repository before "
+        "editing, make requested changes directly, run proportionate checks, "
+        "and finish with a concise summary of edits and verification."
+    )
+
+    async def run_codex_turn(
+        workspace: Path, codex_thread_id: str | None, context: str,
+        prompt: str, images: list[str], run: dict, emit,
+    ) -> tuple[str, str]:
+        response_parts = []
+        completed_response = ""
+        async with AsyncCodex() as codex:
+            account = await codex.account()
+            if account.account is None:
+                raise RuntimeError("connect Codex before running an agent")
+            if run["stopped"]:
+                raise RuntimeError("agent turn was stopped")
+            if codex_thread_id:
+                thread = await codex.thread_resume(
+                    codex_thread_id,
+                    cwd=str(workspace),
+                    sandbox=Sandbox.workspace_write,
+                    approval_mode=ApprovalMode.auto_review,
+                )
+            else:
+                thread = await codex.thread_start(
+                    cwd=str(workspace),
+                    sandbox=Sandbox.workspace_write,
+                    approval_mode=ApprovalMode.auto_review,
+                    developer_instructions=agent_instructions,
+                )
+
+            turn_input = [TextInput(context + (prompt or "Describe and act on the attached image(s)."))]
+            turn_input.extend(ImageInput(image) for image in images)
+            turn = await thread.turn(turn_input)
+            run["turn"] = turn
+            if run["stopped"]:
+                await turn.interrupt()
+            async for event in turn.stream():
+                activity = agent_activity(event)
+                if activity is not None:
+                    emit(activity)
+                if event.method == "item/agentMessage/delta":
+                    response_parts.append(event.payload.delta)
+                    emit({"type": "response_delta", "text": event.payload.delta})
+                elif event.method == "item/completed":
+                    item = getattr(event.payload.item, "root", event.payload.item)
+                    if getattr(item, "type", "") == "agentMessage" and getattr(
+                        getattr(item, "phase", None), "value", None
+                    ) == "final_answer":
+                        completed_response = item.text
+        return completed_response or "".join(response_parts), thread.id
+
+    async def run_claude_turn(
+        workspace: Path, session_id: str | None, context: str,
+        prompt: str, images: list[str], run: dict, emit,
+    ) -> tuple[str, str | None]:
+        options = claude_options(
+            workspace,
+            agent_instructions,
+            workspace_tool_guard(workspace),
+            resume=session_id,
+            include_partial_messages=True,
+        )
+        content = [{"type": "text", "text": context + (prompt or "Describe and act on the attached image(s).")}]
+        content.extend(claude_image_block(image) for image in images)
+
+        async def user_message():
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": content},
+                "parent_tool_use_id": None,
+            }
+
+        response_parts = []
+        result = None
+        async with ClaudeSDKClient(options=options) as client:
+            run["turn"] = client
+            if run["stopped"]:
+                raise RuntimeError("agent turn was stopped")
+            await client.query(user_message())
+            async for message in client.receive_response():
+                for activity in claude_activity(message):
+                    emit(activity)
+                if isinstance(message, StreamEvent) and not message.parent_tool_use_id:
+                    delta = message.event.get("delta") or {}
+                    if message.event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+                        response_parts.append(delta.get("text", ""))
+                        emit({"type": "response_delta", "text": delta.get("text", "")})
+                elif isinstance(message, AssistantMessage) and response_parts == [] and not message.parent_tool_use_id:
+                    # Without partial events, fall back to whole text blocks.
+                    for block in message.content:
+                        if isinstance(block, TextBlock) and block.text:
+                            emit({"type": "response_delta", "text": block.text})
+                elif isinstance(message, ResultMessage):
+                    result = message
+        if result is None:
+            raise RuntimeError("Claude Code ended without a result")
+        if result.is_error and not run["stopped"]:
+            raise RuntimeError(result.result or f"Claude Code failed ({result.subtype})")
+        return result.result or "".join(response_parts), result.session_id
+
     async def execute_agent_run(
-        name: str, project: Path, prompt: str, images: list[str], run: dict
+        name: str, project: Path, prompt: str, images: list[str], run: dict, agent: str
     ):
-        """Run Codex and make its non-sensitive progress available to the chat UI."""
+        """Run the selected agent and make its non-sensitive progress available to the chat UI."""
         queue = run["events"]
         message_text = prompt or (
             f"[{len(images)} image{'s' if len(images) != 1 else ''} attached]"
@@ -2896,81 +3223,48 @@ def serve():
         def emit(value: dict) -> None:
             queue.put_nowait(value)
 
-        response_parts = []
-        completed_response = ""
         try:
-            async with AsyncCodex() as codex:
-                account = await codex.account()
-                if account.account is None:
-                    raise RuntimeError("connect Codex before running an agent")
-                if run["stopped"]:
-                    raise RuntimeError("agent turn was stopped")
+            if run["stopped"]:
+                raise RuntimeError("agent turn was stopped")
+            async with mutation_lock:
+                session = await asyncio.to_thread(read_session, project)
+                work_thread = session_thread(session, run["threadId"])
+                resume_id = work_thread.get(
+                    "claudeSessionId" if agent == "claude" else "threadId"
+                )
+                workspace = thread_workspace(project, work_thread)
+                # An agent that has never seen this thread gets the earlier turns.
+                context = "" if resume_id else conversation_context(
+                    list(work_thread.get("messages", [])), agent
+                )
+            runner = run_claude_turn if agent == "claude" else run_codex_turn
+            response_text, provider_id = await runner(
+                workspace, resume_id, context, prompt, images, run, emit
+            )
 
-                async with mutation_lock:
-                    session = await asyncio.to_thread(read_session, project)
-                    work_thread = session_thread(session, run["threadId"])
-                    codex_thread_id = work_thread.get("threadId")
-                    workspace = thread_workspace(project, work_thread)
-                if codex_thread_id:
-                    thread = await codex.thread_resume(
-                        codex_thread_id,
-                        cwd=str(workspace),
-                        sandbox=Sandbox.workspace_write,
-                        approval_mode=ApprovalMode.auto_review,
-                    )
+            async with mutation_lock:
+                # Re-read so another parallel thread cannot be overwritten.
+                session = await asyncio.to_thread(read_session, project)
+                work_thread = session_thread(session, run["threadId"])
+                messages = list(work_thread.get("messages", []))
+                messages.extend(
+                    [
+                        {"role": "user", "text": message_text},
+                        {"role": "assistant", "text": response_text, "agent": agent},
+                    ]
+                )
+                if agent == "claude":
+                    work_thread["claudeSessionId"] = provider_id
                 else:
-                    thread = await codex.thread_start(
-                        cwd=str(workspace),
-                        sandbox=Sandbox.workspace_write,
-                        approval_mode=ApprovalMode.auto_review,
-                        developer_instructions=(
-                            "Work only inside the current project. Inspect the repository before "
-                            "editing, make requested changes directly, run proportionate checks, "
-                            "and finish with a concise summary of edits and verification."
-                        ),
-                    )
-
-                turn_input = [TextInput(prompt or "Describe and act on the attached image(s).")]
-                turn_input.extend(ImageInput(image) for image in images)
-                turn = await thread.turn(turn_input)
-                run["turn"] = turn
-                if run["stopped"]:
-                    await turn.interrupt()
-                async for event in turn.stream():
-                    activity = agent_activity(event)
-                    if activity is not None:
-                        emit(activity)
-                    if event.method == "item/agentMessage/delta":
-                        response_parts.append(event.payload.delta)
-                        emit({"type": "response_delta", "text": event.payload.delta})
-                    elif event.method == "item/completed":
-                        item = getattr(event.payload.item, "root", event.payload.item)
-                        if getattr(item, "type", "") == "agentMessage" and getattr(
-                            getattr(item, "phase", None), "value", None
-                        ) == "final_answer":
-                            completed_response = item.text
-
-                response_text = completed_response or "".join(response_parts)
-                async with mutation_lock:
-                    # Re-read so another parallel thread cannot be overwritten.
-                    session = await asyncio.to_thread(read_session, project)
-                    work_thread = session_thread(session, run["threadId"])
-                    messages = list(work_thread.get("messages", []))
-                    messages.extend(
-                        [
-                            {"role": "user", "text": message_text},
-                            {"role": "assistant", "text": response_text},
-                        ]
-                    )
-                    work_thread["threadId"] = thread.id
-                    work_thread["messages"] = messages[-100:]
-                    work_thread["updatedAt"] = datetime.now(timezone.utc).isoformat()
-                    if work_thread.get("title", "").startswith("Work thread "):
-                        work_thread["title"] = message_text.replace("\n", " ")[:48]
-                    sync_active_thread(session)
-                    await asyncio.to_thread(write_session, project, session)
-                    await commit()
-                emit({"type": "complete", "messages": work_thread["messages"]})
+                    work_thread["threadId"] = provider_id
+                work_thread["messages"] = messages[-100:]
+                work_thread["updatedAt"] = datetime.now(timezone.utc).isoformat()
+                if work_thread.get("title", "").startswith("Work thread "):
+                    work_thread["title"] = message_text.replace("\n", " ")[:48]
+                sync_active_thread(session)
+                await asyncio.to_thread(write_session, project, session)
+                await commit()
+            emit({"type": "complete", "messages": work_thread["messages"]})
         except Exception as exc:
             if run["stopped"]:
                 emit({"type": "complete", "messages": None, "response": "Stopped."})
@@ -2988,6 +3282,7 @@ def serve():
         project = project_dir(name)
         body = await request.json()
         prompt = str(body.get("prompt", "")).strip()
+        agent = requested_agent(body.get("agent"))
         images = body.get("images", [])
         if not isinstance(images, list) or len(images) > 4:
             raise HTTPException(400, "images must be a list of at most 4 items")
@@ -3012,7 +3307,7 @@ def serve():
             active_turns[key] = run
             agent_runs[run_id] = run
             run["task"] = asyncio.create_task(
-                execute_agent_run(name, project, prompt, images, run)
+                execute_agent_run(name, project, prompt, images, run, agent)
             )
         return {"runId": run_id}
 
@@ -3050,7 +3345,12 @@ def serve():
             raise HTTPException(409, "no agent turn is running")
         active_turn["stopped"] = True
         if active_turn.get("turn") is not None:
-            await active_turn["turn"].interrupt()
+            try:
+                await active_turn["turn"].interrupt()
+            except Exception:
+                # The turn finished between lookup and interrupt.
+                if not active_turn["complete"]:
+                    raise
         return {"stopped": True}
 
     api.mount("/", StaticFiles(directory="/app/build/web", html=True), name="web")
