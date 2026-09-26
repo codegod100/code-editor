@@ -39,6 +39,10 @@ either a long-lived token from `claude setup-token` or an Anthropic API key.
 The token is stored with mode `0600` at `/workspace/.system/claude-auth.json`;
 clicking the chip's remove icon deletes it. Alternatively, supply
 `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` to the container environment.
+A `setup-token` token bills turns to your Claude subscription: a saved token wins
+over the environment, a subscription token wins over an API key, and any
+`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` in the container is hidden from Claude
+Code so it cannot silently take over.
 The CI failure repair webhook continues to use Codex.
 
 ## Storage

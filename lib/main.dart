@@ -2330,10 +2330,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Run `claude setup-token` on a machine where Claude Code is '
-                  'signed in and paste the token it prints, or paste an '
-                  'Anthropic API key. It is stored on the workspace disk and '
-                  'shared by every Claude Code turn in this app.',
+                  'To use your Claude subscription, run `claude setup-token` on '
+                  'a machine where Claude Code is signed in and paste the token '
+                  'it prints. An Anthropic API key also works. It is stored on '
+                  'the workspace disk and shared by every Claude Code turn in '
+                  'this app.',
                 ),
                 const SizedBox(height: 12),
                 TextField(
