@@ -2050,34 +2050,22 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Future<void> _createProject() async {
-    final name = TextEditingController();
     final repo = TextEditingController();
-    final values = await showDialog<List<String>>(
+    final repoUrl = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Add project'),
         content: SizedBox(
           width: _dialogWidth(context, 480),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: name,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Project name',
-                  hintText: 'my-project',
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: repo,
-                decoration: const InputDecoration(
-                  labelText: 'Repository URL (optional)',
-                  hintText: 'https://git.example.com/team/project.git',
-                ),
-              ),
-            ],
+          child: TextField(
+            controller: repo,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Repository URL',
+              hintText: 'https://git.example.com/team/project.git',
+              helperText: 'The project is named after the repository.',
+            ),
+            onSubmitted: (value) => Navigator.pop(context, value.trim()),
           ),
         ),
         actions: [
@@ -2086,23 +2074,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () =>
-                Navigator.pop(context, [name.text.trim(), repo.text.trim()]),
+            onPressed: () => Navigator.pop(context, repo.text.trim()),
             child: const Text('Create'),
           ),
         ],
       ),
     );
-    name.dispose();
     repo.dispose();
-    if (values == null || values.first.isEmpty) return;
+    if (repoUrl == null || repoUrl.isEmpty) return;
     setState(() => _loading = true);
     try {
-      await _request('POST', '/api/projects', {
-        'name': values[0],
-        'repoUrl': values[1],
+      final created = await _request('POST', '/api/projects', {
+        'repoUrl': repoUrl,
       });
-      await _refreshProjects(select: values[0]);
+      await _refreshProjects(select: created['name'] as String?);
     } catch (error) {
       _showError(error);
     } finally {
