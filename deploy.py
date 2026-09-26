@@ -1433,6 +1433,16 @@ def serve():
             "description": "## Summary\n\n" + "\n".join(f"- {subject}" for subject in subjects),
         }
 
+    def project_name_from_repo_url(repo_url: str) -> str:
+        """Derive a project name from the last path segment of a Git URL."""
+        path = repo_url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+        segment = re.split(r"[/:]", path)[-1]
+        segment = segment.removesuffix(".git")
+        segment = re.sub(r"[^A-Za-z0-9._-]+", "-", segment).lstrip("._-")[:64]
+        if not segment:
+            raise HTTPException(400, "could not derive a project name from the repository URL")
+        return segment
+
     @api.get("/api/projects")
     async def list_projects(request: Request):
         handle = user_handle(request.session["user"])
@@ -1446,21 +1456,34 @@ def serve():
         body = await request.json()
         name = str(body.get("name", "")).strip()
         repo_url = str(body.get("repoUrl", "")).strip()
+        if repo_url and not (
+            repo_url.startswith("https://")
+            or repo_url.startswith("http://")
+            or repo_url.startswith("git@")
+        ):
+            raise HTTPException(400, "repository URL must use HTTP(S) or SSH")
+        derive_name = not name
+        if derive_name:
+            if not repo_url:
+                raise HTTPException(400, "repository URL is required")
+            name = project_name_from_repo_url(repo_url)
         if not project_name.fullmatch(name) or name in reserved:
             raise HTTPException(400, "project name must use letters, numbers, ., _, or -")
         async with mutation_lock:
             destination = root / name
-            if destination.exists():
+            if derive_name:
+                # Cloning the same repository twice gets a numbered sibling
+                # instead of failing on the name the user never typed.
+                base, suffix = name[:60], 2
+                while destination.exists() or destination.name in reserved:
+                    destination = root / f"{base}-{suffix}"
+                    suffix += 1
+                name = destination.name
+            elif destination.exists():
                 raise HTTPException(409, "project already exists")
             root.mkdir(parents=True, exist_ok=True)
 
             if repo_url:
-                if not (
-                    repo_url.startswith("https://")
-                    or repo_url.startswith("http://")
-                    or repo_url.startswith("git@")
-                ):
-                    raise HTTPException(400, "repository URL must use HTTP(S) or SSH")
                 temporary = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=root))
                 shutil.rmtree(temporary)
                 try:
