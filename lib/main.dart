@@ -3192,30 +3192,32 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             ],
             icon: const Icon(Icons.more_vert),
           ),
-        const SizedBox(width: 8),
-        Padding(
-          padding: const EdgeInsets.only(right: 4),
-          child: _agentConnected
-              ? InputChip(
-                  avatar: const Icon(Icons.check_circle, size: 16),
-                  label: Text('$_agentLabel connected'),
-                  tooltip: _agentMode == _AgentMode.claude
-                      ? 'Replace the Claude Code token'
-                      : null,
-                  onPressed: _agentMode == _AgentMode.claude
-                      ? () => unawaited(_connectClaude())
-                      : null,
-                  onDeleted: _agentMode == _AgentMode.claude
-                      ? () => unawaited(_disconnectClaude())
-                      : null,
-                  deleteButtonTooltipMessage: 'Disconnect Claude Code',
-                )
-              : FilledButton.tonalIcon(
-                  onPressed: _connectAgent,
-                  icon: const Icon(Icons.link),
-                  label: Text('Connect $_agentLabel'),
-                ),
-        ),
+        if (!_agentConnected || _agentMode != _AgentMode.codex) ...[
+          const SizedBox(width: 8),
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: _agentConnected
+                ? InputChip(
+                    avatar: const Icon(Icons.check_circle, size: 16),
+                    label: Text('$_agentLabel connected'),
+                    tooltip: _agentMode == _AgentMode.claude
+                        ? 'Replace the Claude Code token'
+                        : null,
+                    onPressed: _agentMode == _AgentMode.claude
+                        ? () => unawaited(_connectClaude())
+                        : null,
+                    onDeleted: _agentMode == _AgentMode.claude
+                        ? () => unawaited(_disconnectClaude())
+                        : null,
+                    deleteButtonTooltipMessage: 'Disconnect Claude Code',
+                  )
+                : FilledButton.tonalIcon(
+                    onPressed: _connectAgent,
+                    icon: const Icon(Icons.link),
+                    label: Text('Connect $_agentLabel'),
+                  ),
+          ),
+        ],
         PopupMenuButton<String>(
           tooltip: _userName.isEmpty ? 'AT Protocol account' : _userName,
           onSelected: (value) {
