@@ -4177,16 +4177,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 Row(
                   children: [
                     _buildAgentModePicker(),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        _agentConnected
-                            ? 'Workspace write'
-                            : '$_agentLabel not connected',
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall,
+                    if (!_agentConnected) ...[
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          '$_agentLabel not connected',
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
                       ),
-                    ),
+                    ],
                     const Spacer(),
                     FilledButton.icon(
                       onPressed: _agentBusy
