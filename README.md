@@ -167,8 +167,9 @@ python3 deploy.py
 
 Pushes to `main` run `.github/workflows/deploy-cloud-code-editor.yml`, which
 deploys the merge commit to Modal using a digest-pinned `code-editor-ci` image
-in GitHub Container Registry. The image contains Python 3.12, Git, and the
-pinned Modal CLI; it is rebuilt only when `.github/ci/Dockerfile` or its
+in GitHub Container Registry. The image contains Python 3.12, Git, the pinned
+Modal CLI, and the stable Dart SDK for formatting and analysis; it is rebuilt
+only when `.github/ci/Dockerfile` or its
 publishing workflow changes (or when **Publish CI Base Image** is run manually).
 
 Run **Publish CI Base Image** once before the first deployment. Set its
