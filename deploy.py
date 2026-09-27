@@ -3213,7 +3213,9 @@ def serve():
             # Honor the repository's CLAUDE.md, skills, and .claude settings,
             # but not settings from the shared server-wide config directory.
             setting_sources=["project"],
-            env=credentials,
+            # Each turn's client closes as soon as the result arrives, which
+            # kills any background subagent or shell before it can report back.
+            env={**credentials, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"},
             stderr=lambda line: print(f"claude-code: {line}", flush=True),
             **extra,
         )
@@ -3394,7 +3396,10 @@ def serve():
     agent_instructions = (
         "Work only inside the current project. Inspect the repository before "
         "editing, make requested changes directly, run proportionate checks, "
-        "and finish with a concise summary of edits and verification."
+        "and finish with a concise summary of edits and verification. "
+        "Each turn ends when you reply and nothing keeps running afterward, "
+        "so finish any research or subagent work within the turn and report "
+        "its findings instead of promising to follow up later."
     )
 
     async def run_codex_turn(
@@ -3467,6 +3472,7 @@ def serve():
             }
 
         response_parts = []
+        fallback_parts = []
         result = None
         async with ClaudeSDKClient(options=options) as client:
             run["turn"] = client
@@ -3485,6 +3491,7 @@ def serve():
                     # Without partial events, fall back to whole text blocks.
                     for block in message.content:
                         if isinstance(block, TextBlock) and block.text:
+                            fallback_parts.append(block.text)
                             emit({"type": "response_delta", "text": block.text})
                 elif isinstance(message, ResultMessage):
                     result = message
@@ -3492,7 +3499,10 @@ def serve():
             raise RuntimeError("Claude Code ended without a result")
         if result.is_error and not run["stopped"]:
             raise RuntimeError(result.result or f"Claude Code failed ({result.subtype})")
-        return result.result or "".join(response_parts), result.session_id
+        response_text = result.result or "".join(response_parts or fallback_parts)
+        if not response_text.strip():
+            response_text = "Claude Code finished the turn without a reply."
+        return response_text, result.session_id
 
     async def execute_agent_run(
         name: str, project: Path, prompt: str, images: list[str], run: dict, agent: str
