@@ -154,6 +154,13 @@ Connector handoffs are signed as the signed-in user, recorded with the project's
 handoffs, and reviewed and incorporated from the Agent panel exactly like
 button handoffs. The worker finishes after Claude's turn ends.
 
+### Claude Code MCP connector
+
+Outside the editor, Claude Code itself can hand work to the same bots through
+the `freeq` MCP server in [freeq-mcp](freeq-mcp), registered for this
+repository in `.mcp.json`. Approve it when Claude Code prompts, then ask Claude
+to hand a task to the FreeQ bots in `#tasks`.
+
 ### Fly worker
 
 The long-lived Fly worker that claims editor offers lives in
