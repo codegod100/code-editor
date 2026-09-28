@@ -48,6 +48,7 @@ test('lifecycle acts advance a handoff and stop at a terminal state', () => {
   assert.ok(applyAct(h, 'complete', 'freeq-bot', 'done'));
   assert.equal(applyAct(h, 'fail', 'freeq-bot', 'late'), false);
   assert.deepEqual([h.status, h.note], ['complete', 'done']);
+  assert.equal(h.progress, undefined);
   assert.equal(applyAct({ status: 'offered' }, 'offer', '', ''), false);
 });
 
