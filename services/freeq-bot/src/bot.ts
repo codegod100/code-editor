@@ -81,6 +81,7 @@ bot.on("authError", (error) => {
   console.error("[worker] authentication failed:", error);
   process.exit(1);
 });
+bot.client.on("error", (reason) => console.error("[worker] server error:", reason));
 
 const maxOfferAgeMs = integerEnv("MAX_OFFER_AGE_MS", 120_000);
 const claimed = new Set<string>();
@@ -215,6 +216,33 @@ console.error(
   "[worker] ready as " + bot.client.nick + " (" + bot.identity.did + ") — caps=" +
     CAPABILITY + " on " + channels.join(", "),
 );
+
+/**
+ * The SDK stops reconnecting for good on some server-initiated closes (e.g. an
+ * ERROR "same identity reconnected") without raising authError, leaving a live
+ * process that Fly reports as running but that is in no channel. Treat a
+ * sustained absence from any configured channel as fatal so the restart policy
+ * brings back a fresh connection.
+ */
+const presenceGraceMs = integerEnv("PRESENCE_GRACE_MS", 180_000);
+let absentSince: number | null = null;
+setInterval(() => {
+  const joined = bot.client.joinedChannels;
+  const present =
+    bot.client.connectionState === "connected" &&
+    channels.every((channel) => joined.has(channel.toLowerCase()));
+  if (present) {
+    absentSince = null;
+    return;
+  }
+  absentSince ??= Date.now();
+  if (Date.now() - absentSince < presenceGraceMs) return;
+  console.error(
+    "[worker] not in " + channels.join(", ") + " for " + Math.round(presenceGraceMs / 1000) +
+      "s (transport " + bot.client.connectionState + ") — exiting for a clean restart",
+  );
+  process.exit(1);
+}, 15_000);
 
 const shutdown = (signal: string) =>
   bot.stop(signal).then(() => process.exit(0), () => process.exit(1));
