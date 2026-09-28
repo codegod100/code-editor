@@ -77,6 +77,8 @@ export function applyAct(handoff, verb, actor, note) {
   if (actor) handoff.actor = actor;
   if (note) handoff.note = note;
   if (verb === 'progress' && note) handoff.progress = note;
+  // A finished handoff has no live progress; keep the last note in `note`.
+  if (TERMINAL.has(status)) delete handoff.progress;
   handoff.updatedAt = new Date().toISOString();
   return true;
 }
