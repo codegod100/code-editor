@@ -245,6 +245,8 @@ def serve():
         TextBlock,
         ThinkingBlock,
         ToolUseBlock,
+        create_sdk_mcp_server,
+        tool,
     )
     from openai_codex import ApprovalMode, AsyncCodex, ImageInput, Sandbox, TextInput
     from starlette.middleware.sessions import SessionMiddleware
@@ -2528,23 +2530,37 @@ def serve():
     async def create_freeq_handoff(name: str, request: Request):
         project = project_dir(name)
         body = await request.json()
-        server = str(body.get("server", "wss://irc.freeq.at/irc")).strip()
-        channel = str(body.get("channel", "")).strip()
-        capability = str(body.get("capability", "")).strip()
-        title = str(body.get("title", "")).strip()
-        context = str(body.get("context", "")).strip()
+        return await start_freeq_handoff(
+            name, project, project, request.session.get("user") or {},
+            server=str(body.get("server", "wss://irc.freeq.at/irc")).strip(),
+            channel=str(body.get("channel", "")).strip(),
+            capability=str(body.get("capability", "")).strip(),
+            title=str(body.get("title", "")).strip(),
+            context=str(body.get("context", "")).strip(),
+        )
+
+    async def start_freeq_handoff(
+        name: str, project: Path, checkout: Path, user: dict, *,
+        server: str, channel: str, capability: str, title: str, context: str,
+    ) -> dict:
+        """Publish ``checkout``'s HEAD to AgentGit and offer it to a FreeQ channel.
+
+        Shared by the Agent panel's FreeQ button and Claude Code's ``freeq``
+        connector. The handoff is recorded in ``project``'s session so the
+        existing status, review, and incorporate routes apply to it.
+        """
+        freeq_server_origin(server)
         if not channel.startswith("#"):
             raise HTTPException(400, "FreeQ channel must start with #")
         if not capability or not title:
             raise HTTPException(400, "capability and task are required")
-        user = request.session.get("user") or {}
         owner_did = user.get("did")
         handle = user.get("handle")
         if not isinstance(owner_did, str) or not owner_did.startswith("did:") or not isinstance(handle, str):
             raise HTTPException(401, "AT Protocol authentication is required for FreeQ handoff")
-        if not (project / ".git").exists():
+        if not (checkout / ".git").exists():
             raise HTTPException(400, "AgentGit handoff requires a Git project")
-        status = git_result(project, "status", "--porcelain", timeout=120)
+        status = git_result(checkout, "status", "--porcelain", timeout=120)
         if status.returncode:
             raise HTTPException(500, git_error(status, "could not inspect project before handoff"))
         if status.stdout.strip():
@@ -2556,7 +2572,7 @@ def serve():
         exchange_url = f"https://agentgit.co/{exchange_name}.git"
         snapshot = await asyncio.to_thread(
             subprocess.run,
-            git_command(project, "push", exchange_url, "HEAD:refs/heads/main"),
+            git_command(checkout, "push", exchange_url, "HEAD:refs/heads/main"),
             text=True,
             capture_output=True,
             timeout=300,
@@ -3450,16 +3466,123 @@ def serve():
                         completed_response = item.text
         return completed_response or "".join(response_parts), thread.id
 
+    freeq_default_channel = "#tasks"
+    freeq_default_capability = "prime_agent"
+    freeq_connector_instructions = (
+        " A `freeq` connector can hand a task to the FreeQ worker bots in "
+        f"{freeq_default_channel}: `list_bots` shows who is listening and which "
+        "capabilities they claim, `handoff` offers this checkout's committed "
+        "HEAD with a self-contained task description, and `handoff_status` "
+        "reports progress. Hand off only when the user asks. A worker finishes "
+        "after this turn ends; its report and branch appear in the Agent panel "
+        "for the user to review, so say that instead of waiting for it."
+    )
+
+    def freeq_tool_result(value) -> dict:
+        return {"content": [{"type": "text", "text": json.dumps(value, indent=2)}]}
+
+    def freeq_tool_error(exc: Exception) -> dict:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return {"content": [{"type": "text", "text": f"FreeQ error: {detail}"}], "is_error": True}
+
+    def freeq_connector(name: str, project: Path, workspace: Path, user: dict):
+        """An in-process MCP server that lets Claude Code hand off to FreeQ bots.
+
+        It reuses the Agent panel's handoff path, so a connector handoff is
+        signed as the signed-in AT Protocol user and shows up in the panel.
+        """
+
+        @tool(
+            "list_bots",
+            "List FreeQ bots that have published manifests, with the capabilities "
+            f"they claim. The {freeq_default_channel} worker claims "
+            f"'{freeq_default_capability}'.",
+            {"type": "object", "properties": {}},
+        )
+        async def list_bots(args):
+            try:
+                return freeq_tool_result(await list_freeq_bots())
+            except Exception as exc:
+                return freeq_tool_error(exc)
+
+        @tool(
+            "handoff",
+            "Offer a task to the FreeQ bots in a channel (default "
+            f"{freeq_default_channel}). The current checkout must be clean: commit "
+            "first. Its HEAD is published to a public AgentGit exchange for 24 "
+            "hours, so never hand off secrets. The worker pushes its result to "
+            "the exchange's `worker` branch; the user reviews and incorporates "
+            "it from the Agent panel. Returns the handoff with its taskId.",
+            {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short task summary (max 500 chars)."},
+                    "context": {
+                        "type": "string",
+                        "description": "Self-contained instructions: goal, relevant files, "
+                        "constraints, and how to verify. The worker cannot see this conversation.",
+                    },
+                    "capability": {
+                        "type": "string",
+                        "description": f"Capability to request (default '{freeq_default_capability}').",
+                    },
+                    "channel": {
+                        "type": "string",
+                        "description": f"FreeQ channel (default '{freeq_default_channel}').",
+                    },
+                },
+                "required": ["title", "context"],
+            },
+        )
+        async def handoff(args):
+            try:
+                return freeq_tool_result(await start_freeq_handoff(
+                    name, project, workspace, user,
+                    server="wss://irc.freeq.at/irc",
+                    channel=str(args.get("channel") or freeq_default_channel).strip(),
+                    capability=str(args.get("capability") or freeq_default_capability).strip(),
+                    title=str(args.get("title", "")).strip(),
+                    context=str(args.get("context", "")).strip(),
+                ))
+            except Exception as exc:
+                return freeq_tool_error(exc)
+
+        @tool(
+            "handoff_status",
+            "Report a FreeQ handoff's status (offered, claimed, complete, fail, "
+            "decline, timeout) and the worker's note.",
+            {
+                "type": "object",
+                "properties": {"task_id": {"type": "string"}},
+                "required": ["task_id"],
+            },
+        )
+        async def handoff_status(args):
+            try:
+                return freeq_tool_result(await get_freeq_handoff(name, str(args.get("task_id", ""))))
+            except Exception as exc:
+                return freeq_tool_error(exc)
+
+        return create_sdk_mcp_server("freeq", tools=[list_bots, handoff, handoff_status])
+
     async def run_claude_turn(
         workspace: Path, session_id: str | None, context: str,
         prompt: str, images: list[str], run: dict, emit,
     ) -> tuple[str, str | None]:
+        connectors = {}
+        instructions = agent_instructions
+        if run.get("user", {}).get("did"):
+            connectors["freeq"] = freeq_connector(
+                run["projectName"], run["project"], workspace, run["user"]
+            )
+            instructions += freeq_connector_instructions
         options = claude_options(
             workspace,
-            agent_instructions,
+            instructions,
             workspace_tool_guard(workspace),
             resume=session_id,
             include_partial_messages=True,
+            mcp_servers=connectors,
         )
         content = [{"type": "text", "text": context + (prompt or "Describe and act on the attached image(s).")}]
         content.extend(claude_image_block(image) for image in images)
@@ -3596,7 +3719,10 @@ def serve():
                 raise HTTPException(409, "this work thread is already running")
             run_id = os.urandom(16).hex()
             run = {"events": asyncio.Queue(), "stopped": False, "complete": False,
-                   "threadId": work_thread["id"]}
+                   "threadId": work_thread["id"],
+                   # The FreeQ connector signs handoffs as this user.
+                   "user": dict(request.session.get("user") or {}),
+                   "projectName": name, "project": project}
             active_turns[key] = run
             agent_runs[run_id] = run
             run["task"] = asyncio.create_task(
