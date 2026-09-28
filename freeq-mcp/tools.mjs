@@ -135,8 +135,14 @@ async function publishLocal(repoPath, exchangeUrl) {
     throw new Error('the repository has uncommitted changes; commit or stash them before handing off');
   }
   const head = (await git(root, 'rev-parse', 'HEAD')).trim();
-  await git(root, 'push', '--quiet', exchangeUrl, 'HEAD:refs/heads/main');
-  return { repository: root, head };
+  // AgentGit rejects pushes from shallow clones (the default in Claude Code
+  // on the web), so publish a parentless snapshot of HEAD's tree instead.
+  const shallow = (await git(root, 'rev-parse', '--is-shallow-repository')).trim() === 'true';
+  const published = shallow
+    ? (await git(root, 'commit-tree', 'HEAD^{tree}', '-m', `Snapshot of ${head} for FreeQ handoff`)).trim()
+    : head;
+  await git(root, 'push', '--quiet', exchangeUrl, `${published}:refs/heads/main`);
+  return { repository: root, head, snapshot: shallow };
 }
 
 /** Publish a public https repository's revision; returns its provenance. */
@@ -182,7 +188,9 @@ export function createFreeqServer({ hosted = false } = {}) {
   if (hosted) {
     server.registerTool('new_exchange', {
       description: 'Mint a fresh, empty AgentGit exchange URL. Push the revision to hand off with '
-        + '`git push <url> HEAD:refs/heads/main`, then call handoff with exchange_url. Use this for '
+        + '`git push <url> HEAD:refs/heads/main` (from a shallow clone, which AgentGit rejects, push a '
+        + 'snapshot: `git push <url> $(git commit-tree HEAD^{tree} -m snapshot):refs/heads/main`), '
+        + 'then call handoff with exchange_url. Use this for '
         + 'private repositories, which this server cannot clone. Exchanges are public for 24 hours.',
       inputSchema: {},
     }, guarded(async () => ({ exchangeUrl: newExchangeUrl() })));
@@ -289,28 +297,30 @@ export function createFreeqServer({ hosted = false } = {}) {
       const exchangeUrl = exchange_url || (task_id && handoffs.get(task_id)?.exchangeUrl);
       if (!isExchangeUrl(exchangeUrl)) throw new Error('pass exchange_url or the task_id of a handoff this server made');
       const name = (task_id || exchangeUrl.split('/').pop().replace(/\.git$/, '')).replace(/[^A-Za-z0-9._-]/g, '-');
-      const ref = `refs/freeq/${name}`;
+      const base = `refs/freeq/${name}/base`;
+      const worker = `refs/freeq/${name}/worker`;
       return withScratchRepo(async (dir) => {
         await git(dir, 'fetch', '--no-tags', '--quiet', exchangeUrl,
           '+refs/heads/main:refs/heads/main', '+refs/heads/worker:refs/heads/worker');
         const [log_, stat] = await Promise.all([
           git(dir, 'log', '--oneline', 'main..worker'),
-          git(dir, 'diff', '--stat', 'main...worker'),
+          git(dir, 'diff', '--stat', 'main', 'worker'),
         ]);
         return {
           exchangeUrl,
           commits: log_.trim().split('\n').filter(Boolean),
           diffStat: stat.trim(),
-          fetch: `git fetch --no-tags ${exchangeUrl} +refs/heads/worker:${ref}`,
-          review: `git diff HEAD...${ref}`,
+          fetch: `git fetch --no-tags ${exchangeUrl} +refs/heads/main:${base} +refs/heads/worker:${worker}`,
+          review: `git diff ${base} ${worker}`,
+          apply: `git cherry-pick ${base}..${worker}`,
         };
       });
     }));
   } else {
     server.registerTool('fetch_worker_branch', {
-      description: 'Fetch a completed handoff\'s `worker` branch from its AgentGit exchange into a local '
-        + 'ref (refs/freeq/<task>) and return its commits and diff stat against HEAD. Nothing is merged; '
-        + 'review the ref, then merge or cherry-pick it yourself if the user agrees.',
+      description: 'Fetch a completed handoff\'s exchange into local refs (refs/freeq/<task>/base is what '
+        + 'was handed off, refs/freeq/<task>/worker is the result) and return the worker\'s commits and '
+        + 'diff stat. Nothing is merged; review the diff, then apply it only if the user agrees.',
       inputSchema: {
         task_id: z.string().optional().describe('Task id from this session.'),
         exchange_url: z.string().optional().describe('AgentGit exchange URL, for tasks from earlier sessions.'),
@@ -322,13 +332,23 @@ export function createFreeqServer({ hosted = false } = {}) {
       if (!isExchangeUrl(exchangeUrl)) throw new Error('pass exchange_url or the task_id of a handoff from this session');
       const cwd = resolve(repo_path || handoff?.repository || process.cwd());
       const name = (task_id || exchangeUrl.split('/').pop().replace(/\.git$/, '')).replace(/[^A-Za-z0-9._-]/g, '-');
-      const ref = `refs/freeq/${name}`;
-      await git(cwd, 'fetch', '--no-tags', '--quiet', exchangeUrl, `+refs/heads/worker:${ref}`);
+      const base = `refs/freeq/${name}/base`;
+      const worker = `refs/freeq/${name}/worker`;
+      // Diff against the exchange's main rather than HEAD: a snapshot handoff
+      // shares no history with the local branch.
+      await git(cwd, 'fetch', '--no-tags', '--quiet', exchangeUrl,
+        `+refs/heads/main:${base}`, `+refs/heads/worker:${worker}`);
       const [log_, stat] = await Promise.all([
-        git(cwd, 'log', '--oneline', `HEAD..${ref}`),
-        git(cwd, 'diff', '--stat', `HEAD...${ref}`),
+        git(cwd, 'log', '--oneline', `${base}..${worker}`),
+        git(cwd, 'diff', '--stat', base, worker),
       ]);
-      return { ref, commits: log_.trim().split('\n').filter(Boolean), diffStat: stat.trim(), review: `git diff HEAD...${ref}` };
+      return {
+        base, worker,
+        commits: log_.trim().split('\n').filter(Boolean),
+        diffStat: stat.trim(),
+        review: `git diff ${base} ${worker}`,
+        apply: `git cherry-pick ${base}..${worker}`,
+      };
     }));
   }
 
