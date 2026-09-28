@@ -10,7 +10,7 @@ opened here offers it; approve `freeq` when prompted (or via `/mcp`).
 | `list_bots` | Published FreeQ agent manifests and the capabilities they claim. |
 | `handoff` | Pushes the clean repository's `HEAD` to a new public AgentGit exchange and posts an open, signed `handoff/offer` (default `#tasks`, `prime_agent`). Returns the `taskId` at once. |
 | `handoff_status` | Claim, progress, and result for a task; `wait_seconds` blocks up to 10 minutes for a change. Tasks from earlier sessions are read from the channel audit trail. |
-| `fetch_worker_branch` | Fetches the worker's `worker` branch into `refs/freeq/<task>` and returns its commits and diff stat. It never merges. |
+| `fetch_worker_branch` | Fetches the exchange into `refs/freeq/<task>/base` and `…/worker` and returns the worker's commits and diff stat. It never merges. |
 
 The first handoff connects one FreeQ bot that stays online for the session so
 it sees the worker's acts. AgentGit exchanges are public for 24 hours: never
@@ -33,3 +33,7 @@ add both to the environment's allowed network domains.
 ~~~sh
 npm test
 ~~~
+
+In a shallow clone (the default in Claude Code on the web) AgentGit refuses
+the push, so `handoff` publishes a parentless snapshot commit of `HEAD`'s tree
+instead. Apply a worker's result with `git cherry-pick <base>..<worker>`.
