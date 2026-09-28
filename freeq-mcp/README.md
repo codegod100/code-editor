@@ -37,3 +37,27 @@ npm test
 In a shallow clone (the default in Claude Code on the web) AgentGit refuses
 the push, so `handoff` publishes a parentless snapshot commit of `HEAD`'s tree
 instead. Apply a worker's result with `git cherry-pick <base>..<worker>`.
+
+## Hosting as a claude.ai connector
+
+`http.mjs` serves the same tools over Streamable HTTP, and
+[`modal_app.py`](modal_app.py) deploys it to Modal:
+
+~~~sh
+modal secret create freeq-mcp FREEQ_MCP_TOKEN=$(openssl rand -hex 32)  # once
+modal deploy freeq-mcp/modal_app.py                                    # from the repo root
+~~~
+
+Add `https://<workspace>--freeq-mcp.modal.run/mcp/<FREEQ_MCP_TOKEN>` at
+claude.ai/customize/connectors. Anyone holding that URL can post handoffs as
+the server's bot, so keep it secret; rotating the token means updating the
+Modal secret, redeploying, and re-adding the connector.
+
+A hosted server has no checkout of yours, so two tools differ:
+
+| Tool | Hosted behaviour |
+| --- | --- |
+| `handoff` | Takes `source_repo` (a public https repository it clones, at `ref`) or `exchange_url`: call `new_exchange`, push your revision there with `git push <url> HEAD:refs/heads/main`, then hand off. Use the latter for private repositories. |
+| `fetch_worker_branch` | Returns the worker branch's commits and diff stat plus the `git fetch` command that brings its `main` and `worker` into your checkout as base and worker refs. |
+
+`handoff_status` waits at most 120 seconds per call when hosted.

@@ -24,6 +24,17 @@ export function isExchangeUrl(value) {
     && /^https:\/\/agentgit\.co\/[A-Za-z0-9._-]+\.git$/.test(value);
 }
 
+/** A repository a hosted server may clone: public https only, no credentials. */
+export function isSourceRepoUrl(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 /** Instructions the worker needs regardless of the task, mirroring the editor. */
 export function workerContext(exchangeUrl, context = '') {
   const repository = `Repository exchange: ${exchangeUrl}\n`
