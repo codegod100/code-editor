@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "freeq": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["freeq-mcp/start.sh"],
+      "env": {
+        "FREEQ_OWNER_DID": "${FREEQ_OWNER_DID:-did:plc:ngokl2gnmpbvuvrfckja3g7p}",
+        "FREEQ_SERVER": "${FREEQ_SERVER:-wss://irc.freeq.at/irc}"
+      }
+    }
+  }
+}

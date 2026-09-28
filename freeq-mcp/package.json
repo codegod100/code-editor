@@ -1,0 +1,17 @@
+{
+  "name": "freeq-mcp",
+  "private": true,
+  "type": "module",
+  "description": "MCP connector that lets Claude Code hand tasks to FreeQ bots.",
+  "bin": { "freeq-mcp": "server.mjs" },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "@freeq/bot-kit": "0.1.0",
+    "@freeq/sdk": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "zod": "^4.6.5"
+  }
+}
