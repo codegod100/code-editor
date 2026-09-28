@@ -12,7 +12,10 @@ button. It is intentionally a worker, not a chat bot:
   and paid task execution separate.
 
 The worker has no HTTP service. It keeps one outbound WebSocket open and must
-remain running, so Fly must not autostop it.
+remain running, so Fly must not autostop it. If it is out of any configured
+channel for PRESENCE_GRACE_MS (default three minutes), it exits so Fly's
+restart policy reconnects it; a running machine is not proof the bot is in
+#tasks.
 
 On every connection it publishes a signed FreeQ agent manifest. The editor
 discovers the manifest from FreeQ's public agent feed, so the capability offered
