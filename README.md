@@ -138,6 +138,22 @@ and `ctx`, then remains connected until the offer reaches `complete`, `fail`,
 `decline`, or its deadline. It then exits cleanly. A bot must be present in
 that channel and claim the selected capability.
 
+### Claude Code connector
+
+Claude Code turns get the same handoff as an in-process MCP connector named
+`freeq`, installed on every turn for a signed-in user. Ask Claude to hand a
+task to the FreeQ bots and it can call:
+
+- `list_bots` — discovered bot manifests and the capabilities they claim.
+- `handoff` — offer the work thread's committed `HEAD` to a channel, `#tasks`
+  and capability `prime_agent` by default, with a self-contained description.
+  The checkout must be clean, so Claude commits first.
+- `handoff_status` — the offer's current status and the worker's note.
+
+Connector handoffs are signed as the signed-in user, recorded with the project's
+handoffs, and reviewed and incorporated from the Agent panel exactly like
+button handoffs. The worker finishes after Claude's turn ends.
+
 ### Fly worker
 
 The long-lived Fly worker that claims editor offers lives in
