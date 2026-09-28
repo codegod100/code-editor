@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  applyAct, applyAudit, isExchangeUrl, newExchangeUrl, restOrigin, summarizeManifests, workerContext,
+  applyAct, applyAudit, isExchangeUrl, isSourceRepoUrl, newExchangeUrl, restOrigin, summarizeManifests, workerContext,
 } from './core.mjs';
 
 test('derives the REST origin from the IRC websocket', () => {
@@ -14,6 +14,14 @@ test('mints valid, unique exchange URLs', () => {
   assert.ok(isExchangeUrl(a));
   assert.notEqual(a, newExchangeUrl());
   assert.equal(isExchangeUrl('https://evil.example/x.git'), false);
+});
+
+test('hosted handoffs clone only credential-free https repositories', () => {
+  assert.ok(isSourceRepoUrl('https://github.com/codegod100/code-editor.git'));
+  assert.equal(isSourceRepoUrl('https://user:secret@github.com/x/y.git'), false);
+  assert.equal(isSourceRepoUrl('file:///etc'), false);
+  assert.equal(isSourceRepoUrl('ext::sh -c id'), false);
+  assert.equal(isSourceRepoUrl('git@github.com:x/y.git'), false);
 });
 
 test('worker context leads with the exact clone target', () => {
