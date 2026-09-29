@@ -880,14 +880,35 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     final response = await _request('GET', _projectUrl('/session'));
     if (!mounted) return;
     setState(() {
+      final localThreads = {
+        for (final thread in _workThreads) thread.id: thread,
+      };
+      // A running turn's messages (including the just-sent prompt) only exist
+      // locally until it completes, so a reload must not replace them with the
+      // server's older copy.
       _workThreads = (response['threads'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(AgentWorkThread.fromJson)
-          .toList();
+          .map((thread) {
+        final local = localThreads[thread.id];
+        return local != null &&
+                _runningWorkThreads.contains(thread.id) &&
+                local.messages.length > thread.messages.length
+            ? thread.withMessages(local.messages)
+            : thread;
+      }).toList();
       _activeWorkThreadId = response['activeThreadId'] as String?;
       _messages = (response['messages'] as List<dynamic>? ?? const [])
           .map((item) => AgentMessage.fromJson(item as Map<String, dynamic>))
           .toList();
+      final activeThread = _workThreads
+          .where((thread) => thread.id == _activeWorkThreadId)
+          .firstOrNull;
+      if (activeThread != null &&
+          _runningWorkThreads.contains(activeThread.id) &&
+          activeThread.messages.length > _messages.length) {
+        _messages = activeThread.messages;
+      }
       _threadHistory = (response['history'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(AgentThreadHistory.fromJson)
