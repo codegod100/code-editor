@@ -2686,29 +2686,59 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
+  /// Derives a short tab title from a task description.
+  String _titleFromTask(String task) {
+    var line = task
+        .split('\n')
+        .map((part) => part.trim())
+        .firstWhere((part) => part.isNotEmpty, orElse: () => 'New task');
+    line = line.replaceAll(RegExp(r'\s+'), ' ');
+    line = line.replaceFirst(
+      RegExp(
+        r'^(?:please\s+|can you\s+|could you\s+|i want you to\s+|i need you to\s+)+',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    line = line.replaceFirst(RegExp(r'[.?!:;,\s]+$'), '');
+    if (line.isEmpty) line = 'New task';
+    line = line[0].toUpperCase() + line.substring(1);
+    const maxLength = 40;
+    if (line.length <= maxLength) return line;
+    final cut = line.substring(0, maxLength);
+    final space = cut.lastIndexOf(' ');
+    return '${(space > 15 ? cut.substring(0, space) : cut).trimRight()}…';
+  }
+
   Future<void> _createWorkThread() async {
     if (_project == null) return;
     if (_dirty && !await _confirmDiscard()) return;
-    final name = TextEditingController();
+    if (!_agentConnected) {
+      _showError('Connect $_agentLabel before starting a work thread.');
+      return;
+    }
+    final task = TextEditingController();
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Create another work thread'),
+        title: const Text('New work thread'),
         content: SizedBox(
-          width: _dialogWidth(context, 420),
+          width: _dialogWidth(context, 480),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'This creates an isolated Git worktree inside the current project.',
+                'Describe the task. It runs in an isolated Git worktree and '
+                'the tab is named from it.',
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: name,
+                controller: task,
                 autofocus: true,
-                maxLength: 100,
+                minLines: 3,
+                maxLines: 8,
                 decoration: const InputDecoration(
-                  labelText: 'Work thread name',
+                  labelText: 'Task',
                   hintText: 'Add search to the projects page',
                 ),
               ),
@@ -2722,27 +2752,33 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           ),
           FilledButton(
             onPressed: () {
-              final trimmed = name.text.trim();
+              final trimmed = task.text.trim();
               if (trimmed.isNotEmpty) {
                 Navigator.pop(context, trimmed);
               }
             },
-            child: const Text('Create thread'),
+            child: const Text('Start task'),
           ),
         ],
       ),
     );
-    name.dispose();
+    task.dispose();
     if (result == null) return;
     try {
-      await _request('POST', _projectUrl('/session/threads'), {'name': result});
+      await _request('POST', _projectUrl('/session/threads'), {
+        'name': _titleFromTask(result),
+      });
       _closeActiveCheckoutTerminals();
       _clearActiveCheckoutView();
       await _loadSession();
       await Future.wait([_refreshTree(), _refreshGitStatus()]);
     } catch (error) {
       _showError(error);
+      return;
     }
+    if (!mounted) return;
+    _agentPrompt.text = result;
+    await _runAgent();
   }
 
   Future<void> _archiveWorkThread(AgentWorkThread thread) async {
